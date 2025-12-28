@@ -53,6 +53,7 @@ struct TsScanner::Impl {
     // Early exit tracking
     size_t total_packets{0};
     static constexpr unsigned int EARLY_EXIT_MS = 1000;  // Exit early after 1 second if no DAB found
+    static constexpr unsigned int MPE_EXIT_MS = 2000;    // Exit if MPE seen but no ensembles after 2 seconds
 
     // Shared destination management
     UdpExtractor udp_extractor;
@@ -394,6 +395,16 @@ struct TsScanner::Impl {
             etina_streaming_pids.empty() &&
             results_map.empty()) {
             // No MPE sections, no ETI-NA, no ensembles after 1 second - no DAB here
+            done = true;
+            return 1;
+        }
+
+        // Exit if MPE sections seen but no ensembles discovered after 3 seconds
+        // MPE table_id 0x3E is also used for non-DAB data broadcasting
+        if (static_cast<unsigned int>(elapsed_ms) >= MPE_EXIT_MS &&
+            !mpe_pids.empty() &&
+            results_map.empty()) {
+            // MPE without DAB ensembles - not DAB content
             done = true;
             return 1;
         }
