@@ -212,6 +212,9 @@ bool FfmpegTsMuxer::initialize() {
         stream->codecpar->frame_size = expected_frame_size;
         stream->time_base = AVRational{1, 90000};
 
+        fprintf(stderr, "[FfmpegTsMuxer] Stream %d: frame_size=%d (expected %d)\n",
+                stream_idx, stream->codecpar->frame_size, expected_frame_size);
+
         // Map subchannel to this stream
         // PID will be: PID_AUDIO_BASE + stream_idx (sequential from 0x1000)
         subch_to_stream_[svc.subchannel_id] = stream_idx;
@@ -237,16 +240,27 @@ bool FfmpegTsMuxer::initialize() {
         sid_to_subch_[svc.sid] = svc.subchannel_id;
     }
 
+    fprintf(stderr, "[FfmpegTsMuxer] Created %d streams for %zu services\n",
+            fmt_ctx_->nb_streams, services_.size());
+
     // Set TSID and ONID to match what we use in EIT
+    // Use 1 if tsid_ is 0 since FFmpeg requires 1-65535
     AVDictionary* opts = nullptr;
     char tsid_str[16];
-    snprintf(tsid_str, sizeof(tsid_str), "%d", tsid_);
+    uint16_t effective_tsid = (tsid_ == 0) ? 1 : tsid_;
+    snprintf(tsid_str, sizeof(tsid_str), "%d", effective_tsid);
     av_dict_set(&opts, "mpegts_transport_stream_id", tsid_str, 0);
     av_dict_set(&opts, "mpegts_original_network_id", tsid_str, 0);
     // Set service type globally to radio
     av_dict_set(&opts, "mpegts_service_type", "0x02", 0);
     // Note: FFmpeg assigns PIDs as 0x100 + stream_index
     // To find PID for a subchannel: PID = 0x100 + subch_to_stream_[subchannel_id]
+
+    // Debug: check frame_size right before write_header
+    for (unsigned i = 0; i < fmt_ctx_->nb_streams; i++) {
+        fprintf(stderr, "[FfmpegTsMuxer] Pre-header stream %u: frame_size=%d\n",
+                i, fmt_ctx_->streams[i]->codecpar->frame_size);
+    }
 
     // Write header
     ret = avformat_write_header(fmt_ctx_, &opts);
@@ -267,6 +281,7 @@ bool FfmpegTsMuxer::initialize() {
     // Don't inject SDT here - wait until ensemble discovery is complete with all labels
     // FFmpeg will emit its internal SDT, which we'll override later when complete
 
+    fprintf(stderr, "[FfmpegTsMuxer] Initialized with %zu streams\n", services_.size());
     return true;
 }
 
@@ -504,6 +519,9 @@ void FfmpegTsMuxer::updateMetadata(uint8_t subchannel_id, const FfmpegMetadata& 
 
     // Inject EIT p/f with the now playing info
     injectEit(service_id, event_name, metadata.text);
+
+    fprintf(stderr, "[FfmpegTsMuxer] EIT update SID=0x%04x: %s\n",
+            service_id, event_name.c_str());
 }
 
 uint32_t FfmpegTsMuxer::dvbCrc32(const uint8_t* data, size_t len) {
@@ -752,6 +770,9 @@ std::vector<uint8_t> FfmpegTsMuxer::updateSubchannelMapping(uint16_t service_id,
                 // PMT PID is typically 0x100 + program_number, but we use 0x1000 + program
                 uint16_t pmt_pid = 0x1000 + (service_id & 0x0FFF);
                 injectPmt(service_id, pmt_pid, audio_pid, streams);
+
+                fprintf(stderr, "[FfmpegTsMuxer] Updated SID=0x%04x: SubCh %d -> %d, PID=0x%04x\n",
+                        service_id, old_subch, new_subchannel_id, audio_pid);
                 break;
             }
         }
@@ -767,6 +788,9 @@ int FfmpegTsMuxer::addNewSubchannel(uint8_t subchannel_id, bool dabplus, int sam
     if (it != subch_to_stream_.end()) {
         return it->second;
     }
+
+    fprintf(stderr, "[FfmpegTsMuxer] Cannot add new subchannel %d after initialization (FFmpeg limitation)\n",
+            subchannel_id);
     return -1;
 }
 
@@ -1033,6 +1057,8 @@ void FfmpegTsMuxer::updateServiceLabel(uint16_t service_id, const std::string& n
 
     // Inject updated SDT
     injectSdt();
+
+    fprintf(stderr, "[FfmpegTsMuxer] SDT update SID=0x%04x: %s\n", service_id, name.c_str());
 }
 
 void FfmpegTsMuxer::updateServiceLabelBySubch(uint8_t subchannel_id, const std::string& name) {
@@ -1055,6 +1081,8 @@ void FfmpegTsMuxer::updateEnsembleName(const std::string& name) {
     // Increment SDT version and inject
     sdt_version_ = (sdt_version_ + 1) & 0x1F;
     injectSdt();
+
+    fprintf(stderr, "[FfmpegTsMuxer] SDT update ensemble: %s\n", name.c_str());
 }
 
 void FfmpegTsMuxer::finalize() {

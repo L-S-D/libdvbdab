@@ -253,7 +253,10 @@ struct dvbdab_streamer {
 static void setup_muxer_from_ensemble(dvbdab_streamer* s, const lsdvb::DABEnsemble& ensemble) {
     if (s->muxer_initialized) return;
 
-    s->muxer->setEnsemble(ensemble.eid, ensemble.label);
+    fprintf(stderr, "DEBUG: setup_muxer_from_ensemble called, %zu services\n", ensemble.services.size());
+    // Use config EID if provided, otherwise use discovered EID
+    uint16_t eid = (s->config.eid != 0) ? s->config.eid : ensemble.eid;
+    s->muxer->setEnsemble(eid, ensemble.label);
 
     // Sort services by SID for consistent PAT/PMT ordering
     auto sorted_services = ensemble.services;
@@ -276,6 +279,9 @@ static void setup_muxer_from_ensemble(dvbdab_streamer* s, const lsdvb::DABEnsemb
 
     if (s->muxer->initialize()) {
         s->muxer_initialized = true;
+        fprintf(stderr, "DEBUG: muxer_initialized = true\n");
+    } else {
+        fprintf(stderr, "DEBUG: muxer->initialize() FAILED\n");
     }
 }
 
@@ -284,9 +290,13 @@ static int internal_start_all_services(dvbdab_streamer* s);
 
 // Called when muxer is ready and auto_start_all is set
 static void auto_start_services_if_ready(dvbdab_streamer* s) {
+    fprintf(stderr, "DEBUG: auto_start_services_if_ready: muxer_init=%d auto_start=%d decoders=%zu/%zu\n",
+            s->muxer_initialized, s->auto_start_all,
+            s->dabplus_decoders.size(), s->mp2_decoders.size());
     if (!s->muxer_initialized || !s->auto_start_all) return;
     if (s->dabplus_decoders.empty() && s->mp2_decoders.empty()) {
-        internal_start_all_services(s);
+        int started = internal_start_all_services(s);
+        fprintf(stderr, "DEBUG: internal_start_all_services returned %d\n", started);
     }
 }
 
@@ -295,12 +305,20 @@ static void auto_start_services_if_ready(dvbdab_streamer* s) {
 // Called via eti_callback from EnsembleManager for audio decoding
 static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t len) {
     if (!s->muxer_initialized) {
+        if (s->eti_frame_count < 3) {
+            fprintf(stderr, "DEBUG: streamer %p ETI skip (muxer_init=false)\n", (void*)s);
+        }
         s->eti_frame_count++;
         return;
     }
     if (len < 12) return;
 
     s->eti_frame_count++;
+    if (s->eti_frame_count <= 5 || s->eti_frame_count % 100 == 0) {
+        fprintf(stderr, "DEBUG: streamer %p ETI #%d: len=%zu decoders=%zu/%zu\n",
+                (void*)s, s->eti_frame_count, len,
+                s->dabplus_decoders.size(), s->mp2_decoders.size());
+    }
 
     // Parse ETI frame header
     uint8_t nst = eti_ni[5] & 0x7F;
@@ -322,6 +340,17 @@ static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t 
 
     size_t stream_offset = header_size + fic_size;
 
+    // Debug: on first frame, log which subchannels we have decoders for
+    static bool logged_decoders = false;
+    if (!logged_decoders && s->eti_frame_count == 1) {
+        logged_decoders = true;
+        fprintf(stderr, "DEBUG: Decoders for streamer %p: dabplus=[", (void*)s);
+        for (const auto& [subch, _] : s->dabplus_decoders) fprintf(stderr, "%d,", subch);
+        fprintf(stderr, "] mp2=[");
+        for (const auto& [subch, _] : s->mp2_decoders) fprintf(stderr, "%d,", subch);
+        fprintf(stderr, "]\n");
+    }
+
     // Process each subchannel stream
     for (uint8_t i = 0; i < nst && i < 64; i++) {
         size_t stc_pos = 8 + i * 4;
@@ -330,6 +359,11 @@ static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t 
         uint8_t scid = (eti_ni[stc_pos] >> 2) & 0x3F;
         uint16_t stl = ((eti_ni[stc_pos + 2] & 0x03) << 8) | eti_ni[stc_pos + 3];
         size_t stream_size = stl * 8;
+
+        // Debug: log scids on first frame
+        if (s->eti_frame_count == 1) {
+            fprintf(stderr, "DEBUG: ETI frame scid=%d stl=%d size=%zu\n", scid, stl, stream_size);
+        }
 
         if (stream_offset + stream_size > len) break;
 
@@ -362,6 +396,9 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
         s->basic_ready = false;
         s->complete = false;
         s->auto_start_all = false;
+
+        fprintf(stderr, "DEBUG: dvbdab_streamer_create: streamer=%p format=%d pid=%d\n",
+                (void*)s, config->format, config->pid);
 
         switch (config->format) {
         case DVBDAB_FORMAT_ETI_NA:
@@ -578,11 +615,21 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
 
     if (!streamer->muxer) {
         streamer->muxer = std::make_unique<FfmpegTsMuxer>();
+        fprintf(stderr, "DEBUG: Creating muxer for streamer %p, callback=%p\n",
+                (void*)streamer, (void*)callback);
         streamer->muxer->setOutput([streamer](const uint8_t* data, size_t len) {
+            // Per-streamer counters
             streamer->ts_output_count++;
             streamer->ts_output_bytes += len;
+            if (streamer->ts_output_count <= 5 || streamer->ts_output_count % 500 == 0) {
+                fprintf(stderr, "DEBUG: streamer %p TS #%d len=%zu total=%zu cb=%d\n",
+                        (void*)streamer, streamer->ts_output_count, len,
+                        streamer->ts_output_bytes, streamer->output_cb ? 1 : 0);
+            }
             if (streamer->output_cb) {
                 streamer->output_cb(streamer->output_opaque, data, len);
+            } else if (streamer->ts_output_count <= 5) {
+                fprintf(stderr, "DEBUG: streamer %p NO CALLBACK!\n", (void*)streamer);
             }
         });
     }
@@ -820,6 +867,11 @@ int dvbdab_streamer_start_service(dvbdab_streamer_t *streamer, uint8_t subchanne
 
             decoder->setCallback([streamer, subchannel_id](const uint8_t* data, size_t len) {
                 streamer->audio_frame_count++;
+                if (streamer->audio_frame_count <= 5 || streamer->audio_frame_count % 200 == 0) {
+                    fprintf(stderr, "DEBUG: streamer %p audio #%d subch=%d len=%zu\n",
+                            (void*)streamer, streamer->audio_frame_count, subchannel_id, len);
+                }
+
                 if (!streamer->muxer || len < 7) return;
 
                 auto it = streamer->subch_to_sid.find(subchannel_id);

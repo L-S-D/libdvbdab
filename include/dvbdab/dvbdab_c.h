@@ -147,6 +147,9 @@ typedef struct {
     /* MPE/GSE specific (only used when format == MPE or GSE) */
     uint32_t filter_ip;         /* Multicast IP to filter (host byte order) */
     uint16_t filter_port;       /* UDP port to filter */
+
+    /* Optional: known ensemble ID (0 = discover from stream) */
+    uint16_t eid;               /* Ensemble ID for TS output TSID */
 } dvbdab_streamer_config_t;
 
 /**

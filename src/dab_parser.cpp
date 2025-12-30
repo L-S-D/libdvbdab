@@ -165,11 +165,11 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
     // Check sync word (first 4 bytes)
     uint32_t sync = (frame[0] << 24) | (frame[1] << 16) | (frame[2] << 8) | frame[3];
     if (eti_call_count_ <= 5 || eti_call_count_ % 100 == 0) {
-        LOG_INFO(SERVER, "FIC: process_eti_frame #" << eti_call_count_ << " sync=0x" << std::hex << sync
+        LOG_DEBUG(SERVER, "FIC: process_eti_frame #" << eti_call_count_ << " sync=0x" << std::hex << sync
                  << " expect 0x" << ETI_NI_FSYNC0 << " or 0x" << ETI_NI_FSYNC1 << std::dec);
     }
     if (sync != ETI_NI_FSYNC0 && sync != ETI_NI_FSYNC1) {
-        LOG_INFO(SERVER, "FIC: sync mismatch! first 8 bytes: 0x" << std::hex
+        LOG_DEBUG(SERVER, "FIC: sync mismatch! first 8 bytes: 0x" << std::hex
                  << (int)frame[0] << " 0x" << (int)frame[1] << " 0x" << (int)frame[2]
                  << " 0x" << (int)frame[3] << " 0x" << (int)frame[4] << " 0x" << (int)frame[5]
                  << " 0x" << (int)frame[6] << " 0x" << (int)frame[7] << std::dec);
@@ -289,7 +289,7 @@ static bool fib_crc_ok(const uint8_t* fib, bool debug = false) {
     crc ^= 0xFFFF;  // Final XOR
     uint16_t stored_crc = (fib[30] << 8) | fib[31];
     if (debug) {
-        LOG_INFO(SERVER, "FIB CRC: calc=0x" << std::hex << crc << " stored=0x" << stored_crc
+        LOG_DEBUG(SERVER, "FIB CRC: calc=0x" << std::hex << crc << " stored=0x" << stored_crc
                  << " ok=" << (crc == stored_crc) << std::dec);
     }
     return crc == stored_crc;
@@ -310,7 +310,7 @@ void DABParser::process_fib(const uint8_t* fib) {
         return;  // Skip corrupted FIB
     }
     if (debug) {
-        LOG_INFO(SERVER, "FIB OK! Processing FIGs...");
+        LOG_DEBUG(SERVER, "FIB OK! Processing FIGs...");
     }
 
     // Process FIGs in the FIB
@@ -341,8 +341,8 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
 
     fig_debug_count_++;
 
-    // Log all FIG entries
-    LOG_INFO(SERVER, "FIG: type=" << fig_type << " ext=" << ext << " pd=" << pd
+    // Log all FIG entries (DEBUG - very high frequency)
+    LOG_DEBUG(SERVER, "FIG: type=" << fig_type << " ext=" << ext << " pd=" << pd
              << " len=" << fig_len << " hdr=0x" << std::hex << (int)fig[-1]
              << " first=0x" << (int)fig[0] << std::dec);
 
@@ -369,7 +369,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
             // Bytes 2-3 contain ChgFlg, AlrmFlg, CIFCntH, CIFCntL
             if (ensemble_id_ == 0 || ensemble_id_ != eid) {
                 ensemble_id_ = eid;
-                LOG_INFO(SERVER, "FIG 0/0: Ensemble EID=0x" << std::hex << eid << std::dec);
+                LOG_DEBUG(SERVER, "FIG 0/0: Ensemble EID=0x" << std::hex << eid << std::dec);
             }
             break;
         }
@@ -477,7 +477,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                         int subchid = (data[pos + 1] >> 2) & 0x3F;
                         int primary = (data[pos + 1] >> 1) & 0x01;
 
-                        LOG_INFO(SERVER, "FIG 0/2: DATA SID=0x" << std::hex << sid << std::dec
+                        LOG_DEBUG(SERVER, "FIG 0/2: DATA SID=0x" << std::hex << sid << std::dec
                                  << " subch=" << subchid
                                  << " DSCTy=" << dscty
                                  << " primary=" << primary
@@ -532,7 +532,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                     pos += 2;
                 }
 
-                LOG_INFO(SERVER, "FIG 0/3: SCId=" << scid
+                LOG_DEBUG(SERVER, "FIG 0/3: SCId=" << scid
                          << " -> SubChId=" << subchid
                          << " DSCTy=" << dscty
                          << " DG=" << dg_flag
@@ -595,7 +595,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                         case 0x44a: ua_name = "Journaline"; break;
                     }
 
-                    LOG_INFO(SERVER, "FIG 0/13: SID=0x" << std::hex << sid << std::dec
+                    LOG_DEBUG(SERVER, "FIG 0/13: SID=0x" << std::hex << sid << std::dec
                              << " SCIdS=" << scids
                              << " UAType=0x" << std::hex << ua_type << std::dec
                              << " (" << ua_name << ")"
@@ -642,7 +642,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                 if (ls_flag == 0) {
                     // Short form: MSC subchannel
                     int subchid = data[pos] & 0x3F;
-                    LOG_INFO(SERVER, "FIG 0/8: SID=0x" << std::hex << sid << std::dec
+                    LOG_DEBUG(SERVER, "FIG 0/8: SID=0x" << std::hex << sid << std::dec
                              << " SCIdS=" << scids
                              << " -> SubChId=" << subchid << " (MSC)");
                     pos++;
@@ -650,7 +650,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                     // Long form: FIDCId or SCId
                     if (pos + 1 >= len) break;
                     int scid = ((data[pos] & 0x0F) << 8) | data[pos + 1];
-                    LOG_INFO(SERVER, "FIG 0/8: SID=0x" << std::hex << sid << std::dec
+                    LOG_DEBUG(SERVER, "FIG 0/8: SID=0x" << std::hex << sid << std::dec
                              << " SCIdS=" << scids
                              << " -> SCId=" << scid << " (long form)");
                     pos += 2;
@@ -698,7 +698,7 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext) {
             int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
             if (ensemble_label_first_seen_ms_ < 0) {
                 ensemble_label_first_seen_ms_ = now_ms;
-                LOG_INFO(SERVER, "FIG 1/0: Ensemble EID=0x" << std::hex << ensemble_id_
+                LOG_DEBUG(SERVER, "FIG 1/0: Ensemble EID=0x" << std::hex << ensemble_id_
                          << std::dec << " label='" << ensemble_label_ << "' @" << now_ms << "ms (NEW)");
             } else {
 #if defined(LSDVB_LOG_DEBUG) || defined(LSDVB_LOG_TRACE)
@@ -734,7 +734,7 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext) {
             int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
             if (label_first_seen_ms_.count(sid) == 0) {
                 label_first_seen_ms_[sid] = now_ms;
-                LOG_INFO(SERVER, "FIG 1/1: SID=0x" << std::hex << sid << std::dec
+                LOG_DEBUG(SERVER, "FIG 1/1: SID=0x" << std::hex << sid << std::dec
                          << " '" << service_labels_[sid] << "' @" << now_ms << "ms (NEW, total=" << label_first_seen_ms_.size() << ")");
             } else {
 #if defined(LSDVB_LOG_DEBUG) || defined(LSDVB_LOG_TRACE)
@@ -781,7 +781,7 @@ void DABParser::build_ensemble() {
     std::sort(ensemble_.services.begin(), ensemble_.services.end(),
               [](const DABService& a, const DABService& b) { return a.sid < b.sid; });
 
-    LOG_INFO(SERVER, "DAB: Parsed ensemble '" << ensemble_.label << "' (0x"
+    LOG_DEBUG(SERVER, "DAB: Parsed ensemble '" << ensemble_.label << "' (0x"
              << std::hex << ensemble_.eid << std::dec << ") with "
              << ensemble_.services.size() << " services");
 }
@@ -1302,9 +1302,9 @@ int DABStreamParser::handle_pf_packet(const uint8_t* pkt, size_t len) {
     }
 
     pf_count_++;
-    // Log first few and periodically
+    // Log first few and periodically (DEBUG level - high frequency)
     if (pf_count_ <= 5 || pf_count_ % 500 == 0) {
-        LOG_INFO(SERVER, "DAB: PF packet #" << pf_count_ << " pseq=" << hdr.pseq
+        LOG_DEBUG(SERVER, "DAB: PF packet #" << pf_count_ << " pseq=" << hdr.pseq
                   << " findex=" << hdr.findex << "/" << hdr.fcount
                   << " plen=" << hdr.plen << " len=" << len);
     }
@@ -1316,7 +1316,7 @@ int DABStreamParser::handle_pf_packet(const uint8_t* pkt, size_t len) {
     if (af_data && af_len > 0) {
         af_assembled_count_++;
         if (af_assembled_count_ <= 5 || af_assembled_count_ % 100 == 0) {
-            LOG_INFO(SERVER, "DAB: PF reassembled AF packet #" << af_assembled_count_ << " len=" << af_len);
+            LOG_DEBUG(SERVER, "DAB: PF reassembled AF packet #" << af_assembled_count_ << " len=" << af_len);
         }
 
         // Process the reassembled AF packet
@@ -1344,9 +1344,9 @@ int DABStreamParser::handle_af_packet(const uint8_t* pkt, size_t len) {
     char pt = pkt[9];
 
     af_process_count_++;
-    // Log first few AF packets
+    // Log first few AF packets (DEBUG level - high frequency)
     if (af_process_count_ <= 5 || af_process_count_ % 100 == 0) {
-        LOG_INFO(SERVER, "DAB: AF #" << af_process_count_ << " taglength=" << taglength
+        LOG_DEBUG(SERVER, "DAB: AF #" << af_process_count_ << " taglength=" << taglength
                  << " has_crc=" << has_crc << " pt=" << pt << " buflen=" << len);
     }
 
@@ -1380,9 +1380,9 @@ int DABStreamParser::handle_af_packet(const uint8_t* pkt, size_t len) {
     // Decode tags - tags start at offset AFPACKET_HEADER_LEN (10)
     decode_tagpacket(pkt + AFPACKET_HEADER_LEN, taglength);
 
-    // Log first few results
+    // Log first few results (DEBUG level)
     if (af_process_count_ <= 5) {
-        LOG_INFO(SERVER, "DAB: AF is_eti=" << edi_.is_eti << " fc_valid=" << edi_.m_fc_valid
+        LOG_DEBUG(SERVER, "DAB: AF is_eti=" << edi_.is_eti << " fc_valid=" << edi_.m_fc_valid
                  << " fic_len=" << (int)edi_.fic_length << " nst=" << (int)edi_.m_fc.nst
                  << " mid=" << (int)edi_.m_fc.mid);
     }
@@ -1519,7 +1519,7 @@ bool DABStreamParser::decode_estn(const uint8_t* value, size_t len, uint8_t n) {
 
 bool DABStreamParser::assemble_eti_frame() {
     if (!edi_.is_eti || !edi_.m_fc_valid || !edi_.fic_length) {
-        LOG_INFO(SERVER, "DAB: assemble_eti skip: is_eti=" << edi_.is_eti
+        LOG_DEBUG(SERVER, "DAB: assemble_eti skip: is_eti=" << edi_.is_eti
                  << " fc_valid=" << edi_.m_fc_valid << " fic_len=" << (int)edi_.fic_length);
         return false;
     }
@@ -1533,7 +1533,7 @@ bool DABStreamParser::assemble_eti_frame() {
 
     eti_count_++;
     if (eti_count_ <= 5 || eti_count_ % 100 == 0) {
-        LOG_INFO(SERVER, "DAB: Assembling ETI frame #" << eti_count_ << " mid=" << edi_.m_fc.mid
+        LOG_DEBUG(SERVER, "DAB: Assembling ETI frame #" << eti_count_ << " mid=" << edi_.m_fc.mid
                  << " nst=" << (int)edi_.m_fc.nst << " fic_len=" << (int)edi_.fic_length);
     }
 
