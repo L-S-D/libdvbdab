@@ -36,6 +36,7 @@ typedef struct {
     /* Source type flags */
     int is_etina;           /* 1 if ETI-NA encapsulation */
     int is_gse;             /* 1 if GSE encapsulation (BBFrame), 0 if MPE */
+    int is_tsni;            /* 1 if TS NI V.11 encapsulation */
     /* ETI-NA specific fields (valid when is_etina is true) */
     int etina_padding;      /* ETI-NA: leading 0xFF bytes */
     int etina_bit_offset;   /* ETI-NA: bit position of E1 sync */
@@ -128,7 +129,8 @@ typedef enum {
     DVBDAB_FORMAT_ETI_NA = 0,  /* ETI-NA encapsulation */
     DVBDAB_FORMAT_MPE    = 1,  /* MPE/IP encapsulation */
     DVBDAB_FORMAT_GSE    = 2,  /* GSE encapsulation (in normal TS) */
-    DVBDAB_FORMAT_BBF_TS = 3   /* BBFrame-in-PseudoTS (from DMX_SET_FE_STREAM) */
+    DVBDAB_FORMAT_BBF_TS = 3,  /* BBFrame-in-PseudoTS (from DMX_SET_FE_STREAM) */
+    DVBDAB_FORMAT_TSNI   = 4   /* TS NI V.11 encapsulation */
 } dvbdab_format_t;
 
 /* Opaque unified streamer handle */
