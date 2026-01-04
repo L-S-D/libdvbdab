@@ -12,6 +12,9 @@
 #include <map>
 #include <vector>
 
+// Force unbuffered stderr for debug
+static struct StderrInit { StderrInit() { setvbuf(stderr, NULL, _IONBF, 0); } } _stderr_init;
+
 namespace dvbdab {
 
 // Per-PID state
@@ -33,6 +36,16 @@ struct PidState {
     bool etina_streaming{false};  // True when pipeline confirmed and streaming ETI-NI
     bool etina_detection_reported{false};  // True when detection info has been recorded
     std::unique_ptr<lsdvb::DABParser> etina_fic_parser;  // FIC parser for ensemble discovery
+
+    // TS NI V.11 detection state
+    bool tsni_checked{false};     // Have we checked for TSNI pattern?
+    bool is_tsni{false};          // Confirmed as TS NI V.11?
+    uint8_t tsni_last_seq{0xFF};  // Last sequence byte (the incrementing "table_id")
+    int tsni_seq_count{0};        // Count of sequential increments seen
+    std::vector<uint8_t> tsni_buffer;  // Frame accumulation buffer
+    bool tsni_streaming{false};   // True when TSNI confirmed and streaming ETI-NI
+    bool tsni_detection_reported{false};
+    std::unique_ptr<lsdvb::DABParser> tsni_fic_parser;
 };
 
 struct TsScanner::Impl {
@@ -49,6 +62,12 @@ struct TsScanner::Impl {
     // ETI-NA ensemble results (by PID)
     std::map<uint16_t, DiscoveredEnsemble> etina_ensembles;
     std::vector<uint16_t> etina_streaming_pids;  // PIDs currently streaming ETI-NA
+
+    // TS NI V.11 ensemble results (by PID)
+    std::map<uint16_t, DiscoveredEnsemble> tsni_ensembles;
+    std::vector<uint16_t> tsni_streaming_pids;  // PIDs currently streaming TSNI
+    static constexpr int TSNI_SEQ_THRESHOLD = 4;  // Require 4 sequential increments to confirm
+    static constexpr size_t TSNI_FRAME_SIZE = 6140;  // ETI-NI frame size for TSNI
 
     // Early exit tracking
     size_t total_packets{0};
@@ -115,6 +134,28 @@ struct TsScanner::Impl {
         de.etina_info.padding_bytes = info.padding_bytes;
         de.etina_info.sync_bit_offset = info.sync_bit_offset;
         de.etina_info.inverted = info.inverted;
+
+        for (const auto& svc : ens.services) {
+            DiscoveredService ds;
+            ds.sid = svc.sid;
+            ds.label = svc.label;
+            ds.bitrate = svc.bitrate;
+            ds.subchannel_id = static_cast<uint8_t>(svc.subchannel_id);
+            ds.dabplus = svc.dabplus;
+            de.services.push_back(ds);
+        }
+        return de;
+    }
+
+    // Helper to convert TS NI V.11 ensemble to DiscoveredEnsemble
+    DiscoveredEnsemble toDiscoveredTsni(uint16_t pid, const lsdvb::DABEnsemble& ens) {
+        DiscoveredEnsemble de;
+        de.ip = 0;  // No IP for TSNI
+        de.port = 0;
+        de.pid = pid;
+        de.eid = ens.eid;
+        de.label = ens.label;
+        de.is_tsni = true;  // Mark as TSNI format
 
         for (const auto& svc : ens.services) {
             DiscoveredService ds;
@@ -253,22 +294,101 @@ struct TsScanner::Impl {
             state.mpe_parser->feedTsPayload(payload, payload_len, pusi);
         }
 
+        // TS NI V.11 detection: check for incrementing sequence byte on PUSI packets
+        // Format: pointer_field=0, then incrementing "table_id" as frame sequence
+        if (!state.is_mpe && !state.tsni_checked && pusi && payload_len > 1) {
+            uint8_t pointer = payload[0];
+            if (pointer == 0) {
+                uint8_t seq_byte = payload[1];  // The "table_id" is actually frame sequence
+                if (state.tsni_last_seq != 0xFF) {
+                    // Check if sequence increments (with wraparound)
+                    uint8_t expected = state.tsni_last_seq + 1;
+                    if (seq_byte == expected) {
+                        state.tsni_seq_count++;
+                        if (state.tsni_seq_count >= TSNI_SEQ_THRESHOLD) {
+                            // Confirmed as TSNI
+                            state.is_tsni = true;
+                            state.tsni_checked = true;
+                            state.tsni_fic_parser = std::make_unique<lsdvb::DABParser>();
+                            state.tsni_buffer.reserve(TSNI_FRAME_SIZE + 188);
+                            tsni_streaming_pids.push_back(pid);
+                        }
+                    } else {
+                        // Not sequential, reset count
+                        state.tsni_seq_count = 0;
+                    }
+                }
+                state.tsni_last_seq = seq_byte;
+            }
+        }
+
+        // TS NI V.11 streaming: accumulate frames and parse
+        if (state.is_tsni) {
+            if (pusi && payload_len > 1) {
+                // Frame boundary - output previous frame if we have data
+                if (state.tsni_buffer.size() >= 4) {
+                    // Prepend sync word based on first byte (even/odd)
+                    uint8_t seq_byte = state.tsni_buffer[0];
+                    std::vector<uint8_t> frame;
+                    frame.reserve(TSNI_FRAME_SIZE);
+
+                    // ETI-NI sync: ff 07 3a b6 (even) or ff f8 c5 49 (odd)
+                    if (seq_byte % 2 == 0) {
+                        frame.insert(frame.end(), {0xff, 0x07, 0x3a, 0xb6});
+                    } else {
+                        frame.insert(frame.end(), {0xff, 0xf8, 0xc5, 0x49});
+                    }
+                    // Include full buffer (seq byte is part of the ETI data)
+                    frame.insert(frame.end(), state.tsni_buffer.begin(), state.tsni_buffer.end());
+
+                    // Pad to frame size if needed
+                    if (frame.size() < TSNI_FRAME_SIZE) {
+                        frame.resize(TSNI_FRAME_SIZE, 0x55);
+                    }
+
+                    // Report detection once
+                    if (!state.tsni_detection_reported) {
+                        state.tsni_detection_reported = true;
+                        state.tsni_streaming = true;
+                    }
+
+                    // Feed to FIC parser
+                    if (state.tsni_fic_parser) {
+                        state.tsni_fic_parser->process_eti_frame(frame.data(), frame.size());
+
+                        if (state.tsni_fic_parser->is_complete()) {
+                            const auto& ens = state.tsni_fic_parser->get_ensemble();
+                            tsni_ensembles[pid] = toDiscoveredTsni(pid, ens);
+                        }
+                    }
+                }
+
+                // Start new frame - skip pointer_field (byte 0), include seq byte and rest
+                state.tsni_buffer.clear();
+                state.tsni_buffer.insert(state.tsni_buffer.end(),
+                                         payload + 1, payload + payload_len);
+            } else {
+                // Continuation - append payload
+                state.tsni_buffer.insert(state.tsni_buffer.end(),
+                                         payload, payload + payload_len);
+            }
+        }
+
         // Track packet/PUSI counts for ETI-NA detection
         state.packet_count++;
         if (pusi) {
             state.pusi_count++;
         }
 
-        // ETI-NA detection: check PIDs with no PUSI after threshold
-        if (!state.etina_checked && !state.is_mpe &&
+        // ETI-NA detection: check PIDs after threshold
+        // Try ETI-NA for any non-MPE, non-TSNI PID with enough traffic
+        if (!state.etina_checked && !state.is_mpe && !state.is_tsni &&
             state.packet_count >= ETINA_PACKET_THRESHOLD) {
 
-            if (state.pusi_count == 0) {
-                // No PUSI at all - candidate for ETI-NA
-                state.etina_candidate = true;
-                state.etina_pipeline = std::make_unique<EtinaPipelineState>();
-                state.etina_fic_parser = std::make_unique<lsdvb::DABParser>();
-            }
+            // Try ETI-NA detection - will fail quickly if not ETI-NA format
+            state.etina_candidate = true;
+            state.etina_pipeline = std::make_unique<EtinaPipelineState>();
+            state.etina_fic_parser = std::make_unique<lsdvb::DABParser>();
             state.etina_checked = true;
         }
 
@@ -381,9 +501,15 @@ struct TsScanner::Impl {
         bool etina_complete = (etina_streaming_count == 0) ||
                              (etina_complete_count >= etina_streaming_count);
 
+        // Check if all discovered TSNI ensembles are complete
+        size_t tsni_streaming_count = tsni_streaming_pids.size();
+        size_t tsni_complete_count = tsni_ensembles.size();
+        bool tsni_complete = (tsni_streaming_count == 0) ||
+                            (tsni_complete_count >= tsni_streaming_count);
+
         // If we have any DAB content and all are complete, we're done
-        bool has_content = (mpe_basic_count > 0) || (etina_streaming_count > 0);
-        if (has_content && mpe_complete && etina_complete) {
+        bool has_content = (mpe_basic_count > 0) || (etina_streaming_count > 0) || (tsni_streaming_count > 0);
+        if (has_content && mpe_complete && etina_complete && tsni_complete) {
             done = true;
             return 1;
         }
@@ -393,8 +519,9 @@ struct TsScanner::Impl {
         if (static_cast<unsigned int>(elapsed_ms) >= EARLY_EXIT_MS &&
             mpe_pids.empty() &&
             etina_streaming_pids.empty() &&
+            tsni_streaming_pids.empty() &&
             results_map.empty()) {
-            // No MPE sections, no ETI-NA, no ensembles after 1 second - no DAB here
+            // No MPE sections, no ETI-NA, no TSNI, no ensembles after 1 second - no DAB here
             done = true;
             return 1;
         }
@@ -431,12 +558,16 @@ int TsScanner::feed(const uint8_t* data, size_t len) {
 std::vector<DiscoveredEnsemble> TsScanner::getResults() {
     // Build results from MPE ensembles
     std::vector<DiscoveredEnsemble> results;
-    results.reserve(impl_->results_map.size() + impl_->etina_ensembles.size());
+    results.reserve(impl_->results_map.size() + impl_->etina_ensembles.size() + impl_->tsni_ensembles.size());
     for (const auto& [key, ens] : impl_->results_map) {
         results.push_back(ens);
     }
     // Add ETI-NA ensembles
     for (const auto& [pid, ens] : impl_->etina_ensembles) {
+        results.push_back(ens);
+    }
+    // Add TSNI ensembles
+    for (const auto& [pid, ens] : impl_->tsni_ensembles) {
         results.push_back(ens);
     }
     return results;

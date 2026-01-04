@@ -133,12 +133,18 @@ struct DiscoveredEnsemble {
     bool is_etina{false};        // True if this is an ETI-NA ensemble
     EtiNaInfo etina_info;        // ETI-NA detection parameters
 
+    // TS NI V.11 format (satellite DAB via section-like framing)
+    bool is_tsni{false};         // True if this is a TS NI V.11 ensemble
+
     size_t service_count() const { return services.size(); }
 
     // Convenience: formatted IP:port string
     std::string address() const {
         if (is_etina) {
             return "ETI-NA PID " + std::to_string(pid);
+        }
+        if (is_tsni) {
+            return "TSNI PID " + std::to_string(pid);
         }
         return ipToString(ip) + ":" + std::to_string(port);
     }
