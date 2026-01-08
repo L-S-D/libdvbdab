@@ -307,7 +307,15 @@ static void setup_processor_from_ensemble(dvbdab_streamer* s, const DABEnsemble&
         cs.dabplus = svc.dabplus;
         cs.subchannel_id = svc.subchannel_id;
         cs.bitrate = svc.bitrate;
-        cs.sample_rate = 48000;
+        // Estimate sample rate based on codec and bitrate
+        // DAB (MP2) at low bitrates typically uses 24kHz (MPEG-2 Layer II)
+        // DAB+ (AAC) typically uses 48kHz or 32kHz
+        // Note: actual PTS calculation parses sample rate from frame headers
+        if (svc.dabplus) {
+            cs.sample_rate = 48000;  // DAB+ typically 48kHz
+        } else {
+            cs.sample_rate = (svc.bitrate <= 80) ? 24000 : 48000;  // DAB MP2
+        }
 
         s->processor->addService(cs);
     }

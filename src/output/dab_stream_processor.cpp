@@ -123,8 +123,29 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
                 auto it = subch_to_sid_.find(subchannel_id);
                 if (it == subch_to_sid_.end()) return;
 
+                // Parse sample rate from MP2 header
+                // Syncword(12) + ID(1) + Layer(2) + Protection(1) + Bitrate(4) + SampleRate(2) + ...
+                int sample_rate = 48000;  // Default fallback
+                if (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0) {
+                    int version = (data[1] >> 3) & 0x03;  // 0=MPEG2.5, 2=MPEG2, 3=MPEG1
+                    int sr_idx = (data[2] >> 2) & 0x03;
+                    static const int sr_table[4][4] = {
+                        {11025, 12000, 8000, 0},   // MPEG2.5
+                        {0, 0, 0, 0},              // Reserved
+                        {22050, 24000, 16000, 0},  // MPEG2
+                        {44100, 48000, 32000, 0}   // MPEG1
+                    };
+                    if (version != 1 && sr_idx < 3) {
+                        sample_rate = sr_table[version][sr_idx];
+                    }
+                }
+
+                // Safety check to prevent division by zero
+                if (sample_rate == 0) sample_rate = 48000;
+
                 int64_t pts = pts_counter_[it->second];
-                pts_counter_[it->second] += 2160;  // 1152/48000*90000
+                // 1152 samples per MP2 Layer II frame
+                pts_counter_[it->second] += (int64_t)1152 * 90000 / sample_rate;
 
                 muxer_.feedAudioFrame(it->second, data, len, pts);
             });
