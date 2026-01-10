@@ -127,8 +127,10 @@ private:
         int protlvl;
         int uep_indx;
         int dabplus;
+        bool codec_known = false;  // true when ASCTy from FIG 0/2 has been applied
     };
     std::map<int, SubChannel> subchannels_;
+    std::map<int, int> pending_ascty_;  // subchid -> ascty (FIG 0/2 before FIG 0/1)
 
     struct ServiceInfo {
         uint32_t sid;

@@ -7,14 +7,13 @@
  * - PAT (Program Association Table) - program to PMT PID mapping
  * - PMT (Program Map Table) - elementary stream configuration per service
  * - SDT (Service Description Table) - service names and metadata
- * - TDT (Time and Date Table) - current UTC time
  * - EIT p/f (Event Information Table) - now/next playing info
  * - EIT schedule (table_id 0x50+) - full EPG schedule data
  * - PES audio packets with PCR for stream synchronization
  *
  * References:
  *   ISO/IEC 13818-1 - MPEG-2 Systems (TS packet structure, PES)
- *   ETSI EN 300 468 - DVB SI (PAT, PMT, SDT, EIT, TDT)
+ *   ETSI EN 300 468 - DVB SI (PAT, PMT, SDT, EIT)
  */
 
 #include <cstdint>
@@ -34,14 +33,13 @@ inline constexpr size_t TS_MUXER_PACKET_SIZE = 188;  ///< TS packet size in byte
 inline constexpr uint16_t PID_PAT = 0x0000;          ///< PAT always on PID 0
 inline constexpr uint16_t PID_SDT = 0x0011;          ///< SDT/BAT PID
 inline constexpr uint16_t PID_EIT = 0x0012;          ///< EIT PID
-inline constexpr uint16_t PID_TDT = 0x0014;          ///< TDT/TOT PID
 inline constexpr uint16_t PID_NULL = 0x1FFF;         ///< Null packet PID
 /// @}
 
 /// @name Stream Types (ISO/IEC 13818-1 Table 2-36)
 /// @{
 inline constexpr uint8_t STREAM_TYPE_AAC_ADTS = 0x0F;   ///< DAB+ (ISO/IEC 13818-7 AAC ADTS)
-inline constexpr uint8_t STREAM_TYPE_MPEG_AUDIO = 0x03; ///< DAB (ISO/IEC 11172-3 MPEG Layer II)
+inline constexpr uint8_t STREAM_TYPE_MPEG_AUDIO = 0x04; ///< DAB (ISO/IEC 13818-3 MPEG-2 Layer II)
 /// @}
 
 /**
@@ -73,7 +71,7 @@ struct TsService {
  * @brief FFmpeg-free MPEG-TS muxer for DAB audio streaming
  *
  * Generates compliant MPEG-TS output with full DVB SI support including
- * PAT, PMT, SDT, TDT, and EIT (both present/following and schedule).
+ * PAT, PMT, SDT, and EIT (both present/following and schedule).
  *
  * @par Usage
  * @code
@@ -187,7 +185,6 @@ private:
     void outputPat();
     void outputPmt(const TsService& service);
     void outputSdt();
-    void outputTdt();
     void outputEit(uint16_t sid);
     std::vector<uint8_t> buildEitSection(uint16_t sid, uint8_t section_number,
         uint16_t event_id, time_t start_time, const std::string& event_name, bool is_running);
@@ -243,12 +240,26 @@ private:
     };
     std::map<uint16_t, NowPlaying> now_playing_;
 
-    // PCR tracking per audio PID
-    std::map<uint16_t, int64_t> last_pcr_;
+    // PCR tracking - use global timeline for multi-program sync
+    int64_t global_pcr_{-1};  // Global PCR timeline (27MHz)
     std::map<uint16_t, size_t> frames_since_pcr_;
 
-    // PSI output tracking
-    size_t frames_since_psi_{0};
+    // Audio frame buffering for PES aggregation (reduces overhead, improves playback)
+    struct AudioBuffer {
+        std::vector<uint8_t> data;
+        int64_t first_pts{0};
+        size_t frame_count{0};
+    };
+    std::map<uint16_t, AudioBuffer> audio_buffers_;
+    static constexpr size_t PES_TARGET_SIZE = 1400;  // Target ~1400 bytes per PES (FFmpeg uses ~1355)
+
+    void flushAudioBuffer(uint16_t sid);
+
+    // Time-based PSI output (PAT/PMT every 230ms, SDT every ~667ms)
+    int64_t last_psi_pts_{-1};  // Last PTS when PSI was output (-1 = not yet)
+    static constexpr int64_t PSI_INTERVAL_PTS = 20700;  // 230ms in 90kHz PTS units
+    static constexpr int64_t SDT_INTERVAL_PTS = 60000;  // ~667ms in 90kHz PTS units
+    int64_t last_sdt_pts_{-1};
 
     // EIT schedule storage
     std::map<uint16_t, EpgSchedule> service_schedules_;

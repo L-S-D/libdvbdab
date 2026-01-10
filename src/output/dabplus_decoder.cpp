@@ -70,7 +70,9 @@ bool DabPlusDecoder::checkAuCrc(const uint8_t* buf, size_t len) {
 }
 
 void DabPlusDecoder::buildAdtsHeader(uint8_t* header, size_t au_len) {
-    // Sample rate index: 32k=0x5, 16k=0x8, 48k=0x3, 24k=0x6
+    // Sample rate index for ADTS - uses core rates for implicit SBR signaling
+    // Decoders detect SBR in bitstream and upsample automatically
+    // Index: 32k=0x5, 16k=0x8, 48k=0x3, 24k=0x6
     static const uint8_t sample_rate_table[4] = {0x5, 0x8, 0x3, 0x6};
     uint8_t sfi = sample_rate_table[(params_.dac_rate ? 2 : 0) | (params_.sbr_flag ? 1 : 0)];
 

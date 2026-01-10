@@ -23,7 +23,6 @@ void TsMuxer::addService(const TsService& service) {
     subch_to_sid_[service.subchannel_id] = service.sid;
     cc_[service.pmt_pid] = 0;
     cc_[service.audio_pid] = 0;
-    last_pcr_[service.audio_pid] = -1;
     frames_since_pcr_[service.audio_pid] = 0;
 }
 
@@ -291,35 +290,6 @@ void TsMuxer::outputSdt() {
     section.push_back(crc & 0xFF);
 
     outputSection(PID_SDT, section);
-}
-
-void TsMuxer::outputTdt() {
-    std::vector<uint8_t> section;
-    section.reserve(16);  // TDT: fixed 8 bytes
-
-    // table_id = 0x70 (TDT)
-    section.push_back(0x70);
-
-    // section_syntax_indicator=0, reserved, section_length=5
-    section.push_back(0x70);
-    section.push_back(0x05);
-
-    // UTC time: MJD(2) + BCD time(3)
-    time_t now = time(nullptr);
-    int64_t days = now / 86400;
-    int mjd = 40587 + static_cast<int>(days);  // Unix epoch = MJD 40587
-
-    section.push_back((mjd >> 8) & 0xFF);
-    section.push_back(mjd & 0xFF);
-
-    struct tm* utc = gmtime(&now);
-    auto toBcd = [](int v) -> uint8_t { return ((v / 10) << 4) | (v % 10); };
-    section.push_back(toBcd(utc->tm_hour));
-    section.push_back(toBcd(utc->tm_min));
-    section.push_back(toBcd(utc->tm_sec));
-
-    // TDT has no CRC
-    outputSection(PID_TDT, section);
 }
 
 // Helper to build one EIT p/f section
@@ -813,51 +783,92 @@ void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t p
     }
 }
 
+void TsMuxer::flushAudioBuffer(uint16_t sid) {
+    auto it = sid_to_index_.find(sid);
+    if (it == sid_to_index_.end()) return;
+
+    const auto& svc = services_[it->second];
+    uint16_t audio_pid = svc.audio_pid;
+    auto& buf = audio_buffers_[sid];
+
+    if (buf.data.empty()) return;
+
+    // Determine if we should insert PCR
+    // Use global PCR timeline to avoid jitter when switching between programs
+    bool insert_pcr = false;
+    int64_t pcr = buf.first_pts * 300;  // Convert 90kHz PTS to 27MHz PCR
+
+    // Update global PCR to track maximum across all services
+    if (pcr > global_pcr_) {
+        global_pcr_ = pcr;
+    }
+
+    // Use global PCR for output to ensure monotonic timeline
+    int64_t output_pcr = global_pcr_;
+
+    if (frames_since_pcr_[audio_pid] == 0) {
+        // First frame for this PID - insert PCR
+        insert_pcr = true;
+        frames_since_pcr_[audio_pid] = 1;
+    } else {
+        frames_since_pcr_[audio_pid] += buf.frame_count;
+        if (frames_since_pcr_[audio_pid] >= 3) {
+            insert_pcr = true;
+            frames_since_pcr_[audio_pid] = 0;
+        }
+    }
+
+    outputPes(audio_pid, buf.data.data(), buf.data.size(), buf.first_pts, insert_pcr, output_pcr);
+
+    buf.data.clear();
+    buf.frame_count = 0;
+}
+
 void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int64_t pts) {
     auto it = sid_to_index_.find(sid);
     if (it == sid_to_index_.end() || len == 0) return;
 
-    const auto& svc = services_[it->second];
-    uint16_t audio_pid = svc.audio_pid;
+    // Time-based PSI output (DVB compliant: PAT/PMT every 500ms, SDT every 2s)
+    // Track maximum PTS seen to handle multi-service streams where each service has different PTS
+    if (pts > last_psi_pts_) {
+        bool output_psi = (last_psi_pts_ < 0) || (pts - last_psi_pts_ >= PSI_INTERVAL_PTS);
+        if (output_psi) {
+            last_psi_pts_ = pts;
+            outputPat();
+            for (const auto& s : services_) {
+                outputPmt(s);
+            }
 
-    // Periodic PSI output (~every 100 frames = ~2.4 seconds)
-    if (++frames_since_psi_ >= 100) {
-        frames_since_psi_ = 0;
-        outputPat();
-        for (const auto& s : services_) {
-            outputPmt(s);
+            // SDT every 2 seconds (DVB max interval)
+            if (last_sdt_pts_ < 0 || pts - last_sdt_pts_ >= SDT_INTERVAL_PTS) {
+                last_sdt_pts_ = pts;
+                outputSdt();
+            }
         }
-        outputSdt();
-        outputTdt();
     }
 
     // EIT schedule carousel - output complete table periodically
-    // Version changes only happen at carousel boundaries (complete table first)
     if (++frames_since_eit_ >= eit_carousel_interval_) {
         frames_since_eit_ = 0;
         outputEitScheduleCarousel();
     }
 
-    // Determine if we should insert PCR
-    // Insert PCR on first frame and every ~3 frames (~72ms) after that
-    bool insert_pcr = false;
-    int64_t pcr = pts * 300;  // Convert 90kHz PTS to 27MHz PCR
+    // Buffer audio frames for PES aggregation (reduces overhead like FFmpeg)
+    auto& buf = audio_buffers_[sid];
 
-    if (last_pcr_[audio_pid] < 0) {
-        // First frame - always insert PCR
-        insert_pcr = true;
-        last_pcr_[audio_pid] = pcr;
-        frames_since_pcr_[audio_pid] = 0;
-    } else {
-        frames_since_pcr_[audio_pid]++;
-        if (frames_since_pcr_[audio_pid] >= 3) {
-            insert_pcr = true;
-            last_pcr_[audio_pid] = pcr;
-            frames_since_pcr_[audio_pid] = 0;
-        }
+    // Store first PTS for this buffer
+    if (buf.data.empty()) {
+        buf.first_pts = pts;
     }
 
-    outputPes(audio_pid, data, len, pts, insert_pcr, pcr);
+    // Append frame to buffer
+    buf.data.insert(buf.data.end(), data, data + len);
+    buf.frame_count++;
+
+    // Flush when buffer reaches target size
+    if (buf.data.size() >= PES_TARGET_SIZE) {
+        flushAudioBuffer(sid);
+    }
 }
 
 // FfmpegTsMuxer compatibility: feed by subchannel_id

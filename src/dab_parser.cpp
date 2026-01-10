@@ -67,6 +67,7 @@ DABParser::~DABParser() = default;
 
 void DABParser::reset() {
     subchannels_.clear();
+    pending_ascty_.clear();
     service_map_.clear();
     service_labels_.clear();
     ensemble_label_.clear();
@@ -128,16 +129,23 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
         build_ensemble();
     }
 
-    // Check for basic ready
+    // Check for basic ready - requires ALL audio subchannels have FIG 0/1 AND FIG 0/2
     if (!basic_ready_ && !service_map_.empty()) {
         size_t valid_services = 0;
+        bool all_ready = true;
+
         for (const auto& [sid, info] : service_map_) {
-            if (info.primary_subch >= 0 && subchannels_.count(info.primary_subch)) {
-                valid_services++;
+            if (info.primary_subch >= 0) {
+                auto it = subchannels_.find(info.primary_subch);
+                if (it == subchannels_.end() || !it->second.codec_known) {
+                    all_ready = false;  // Missing FIG 0/1 or FIG 0/2
+                } else {
+                    valid_services++;
+                }
             }
         }
 
-        if (valid_services > 0) {
+        if (valid_services > 0 && all_ready) {
             if (valid_services != last_basic_service_count_) {
                 last_basic_service_count_ = valid_services;
                 basic_stable_frames_ = 0;
@@ -286,8 +294,15 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                 sc.startaddr = startaddr;
                 if (subchannels_.count(subchid)) {
                     sc.dabplus = subchannels_[subchid].dabplus;
+                    sc.codec_known = subchannels_[subchid].codec_known;
+                } else if (pending_ascty_.count(subchid)) {
+                    // FIG 0/2 arrived first - apply stored ASCTy
+                    sc.dabplus = (pending_ascty_[subchid] == 63) ? 1 : 0;
+                    sc.codec_known = true;
+                    pending_ascty_.erase(subchid);
                 } else {
                     sc.dabplus = 0;
+                    sc.codec_known = false;
                 }
 
                 if (form == 0) {
@@ -349,10 +364,17 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
 
                         if (subchannels_.count(subchid)) {
                             subchannels_[subchid].dabplus = (ascty == 63) ? 1 : 0;
+                            subchannels_[subchid].codec_known = true;
                             LOG_DEBUG(FIC, "FIG 0/2: SID=0x" << std::hex << sid
                                      << " subch=" << std::dec << subchid
                                      << " ASCTy=" << ascty
                                      << " -> " << ((ascty == 63) ? "DAB+" : "DAB"));
+                        } else {
+                            // Subchannel not yet created by FIG 0/1 - store for later
+                            pending_ascty_[subchid] = ascty;
+                            LOG_DEBUG(FIC, "FIG 0/2: SID=0x" << std::hex << sid
+                                     << " subch=" << std::dec << subchid
+                                     << " ASCTy=" << ascty << " (pending)");
                         }
 
                         if (primary && info.primary_subch < 0) {

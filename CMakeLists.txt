@@ -280,3 +280,17 @@ add_executable(test_ehb_eit
 target_link_libraries(test_ehb_eit dvbdab)
 
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
+
+# ============================================================================
+# Install targets
+# ============================================================================
+include(GNUInstallDirs)
+
+install(TARGETS dvbdab
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(DIRECTORY include/dvbdab
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)

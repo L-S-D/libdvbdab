@@ -64,6 +64,16 @@ public:
     // Get current parameters (valid after first superframe)
     const DabPlusParams& getParams() const { return params_; }
 
+    /// Get output sample rate in Hz (32000 or 48000 per ETSI TS 102 563)
+    int getOutputSampleRate() const {
+        return params_.dac_rate ? 48000 : 32000;
+    }
+
+    /// Get samples per frame (2048 for SBR, 1024 otherwise)
+    int getSamplesPerFrame() const {
+        return params_.sbr_flag ? 2048 : 1024;
+    }
+
     // Statistics
     size_t getFrameCount() const { return frame_count_; }
     size_t getSuperframeCount() const { return superframe_count_; }
