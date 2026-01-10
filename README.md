@@ -20,7 +20,7 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 
 - **MPEG-TS Output**
   - Custom TS muxer (no FFmpeg dependency)
-  - Full DVB SI: PAT, PMT, SDT, TDT, EIT (present/following + schedule)
+  - Full DVB SI: PAT, PMT, SDT, EIT (present/following + schedule)
   - Deterministic PID allocation based on subchannel ID
 
 - **EPG Support**
@@ -43,6 +43,29 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 ```bash
 cmake -B build
 cmake --build build
+```
+
+### Install
+
+```bash
+sudo cmake --install build
+```
+
+This installs:
+- Library: `/usr/local/lib/libdvbdab.a`
+- Headers: `/usr/local/include/dvbdab/`
+
+### Link Against Library
+
+```cmake
+# In your CMakeLists.txt
+find_library(DVBDAB_LIB dvbdab)
+target_link_libraries(your_app ${DVBDAB_LIB} z pugixml)
+```
+
+Or with pkg-config style flags:
+```bash
+g++ -o myapp myapp.cpp -ldvbdab -lz -lpugixml
 ```
 
 ## Usage
@@ -143,7 +166,6 @@ Deterministic PID allocation based on subchannel_id:
 - Audio PID: `0x1000 + subchannel_id`
 - SDT PID: `0x0011` (standard)
 - EIT PID: `0x0012` (standard)
-- TDT PID: `0x0014` (standard)
 
 ## Log Levels
 
