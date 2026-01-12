@@ -294,7 +294,7 @@ static void setup_processor_from_ensemble(dvbdab_streamer* s, const DABEnsemble&
 
     // Use config EID if provided, otherwise use discovered EID
     uint16_t eid = (s->config.eid != 0) ? s->config.eid : ensemble.eid;
-    s->processor->setEnsemble(eid, ensemble.label);
+    s->processor->setEnsemble(eid, ensemble.label, ensemble.label);
 
     // Use subchannel_id for deterministic PID allocation
     for (const auto& svc : ensemble.services) {
@@ -382,6 +382,9 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        // Update ensemble name/provider now that label is available
+                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
+                        s->processor->setEnsemble(eid, ens.label, ens.label);
                         for (const auto& svc : ens.services) {
                             s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
                         }
@@ -429,8 +432,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                 if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
                     s->cached_ensemble = ens;
                     s->complete = true;
-                    // Update service labels in muxer now that we have all names
                     if (s->processor) {
+                        // Update ensemble name/provider now that label is available
+                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
+                        s->processor->setEnsemble(eid, ens.label, ens.label);
                         for (const auto& svc : ens.services) {
                             s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
                         }
@@ -478,8 +483,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                 if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
                     s->cached_ensemble = ens;
                     s->complete = true;
-                    // Update service labels in muxer now that we have all names
                     if (s->processor) {
+                        // Update ensemble name/provider now that label is available
+                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
+                        s->processor->setEnsemble(eid, ens.label, ens.label);
                         for (const auto& svc : ens.services) {
                             s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
                         }
@@ -528,6 +535,9 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        // Update ensemble name/provider now that label is available
+                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
+                        s->processor->setEnsemble(eid, ens.label, ens.label);
                         for (const auto& svc : ens.services) {
                             s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
                         }
@@ -565,6 +575,9 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        // Update ensemble name/provider now that label is available
+                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
+                        s->processor->setEnsemble(eid, ens.label, ens.label);
                         for (const auto& svc : ens.services) {
                             s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
                         }
