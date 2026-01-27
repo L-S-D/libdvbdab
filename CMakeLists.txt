@@ -279,6 +279,32 @@ add_executable(test_ehb_eit
 )
 target_link_libraries(test_ehb_eit dvbdab)
 
+# edi_info - Analyze EDI streams and show subchannel info
+add_executable(edi_info
+    src/edi_info.cpp
+    src/sources/bbf_ts_source.cpp
+    src/sources/gse_ts_source.cpp
+    src/sources/mpe_ts_source.cpp
+    src/parsers/gse_parser.cpp
+    src/parsers/mpe_parser.cpp
+    src/parsers/udp_extractor.cpp
+    src/parsers/pf_reassembler.cpp
+    src/logging.cpp
+)
+
+# edi_extract - Extract audio from EDI streams without FIC
+add_executable(edi_extract
+    src/edi_extract.cpp
+    src/sources/bbf_ts_source.cpp
+    src/sources/gse_ts_source.cpp
+    src/sources/mpe_ts_source.cpp
+    src/parsers/gse_parser.cpp
+    src/parsers/mpe_parser.cpp
+    src/parsers/udp_extractor.cpp
+    src/parsers/pf_reassembler.cpp
+    src/logging.cpp
+)
+
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
 
 # ============================================================================

@@ -49,6 +49,14 @@ const uint8_t* etina_strip_padding(
     return nullptr;
 }
 
+// Helper: compact buffer when read_index is large
+static void compact_e1_buffer(EtinaE1State& state) {
+    if (state.read_index > 4096) {
+        state.buffer.erase(state.buffer.begin(), state.buffer.begin() + state.read_index);
+        state.read_index = 0;
+    }
+}
+
 // Step 2: Find E1 sync and extract aligned frames
 const uint8_t* etina_extract_e1_frame(
     EtinaE1State& state,
@@ -59,11 +67,14 @@ const uint8_t* etina_extract_e1_frame(
         state.buffer.insert(state.buffer.end(), data, data + len);
     }
 
+    // Available data after read_index
+    size_t available = state.buffer.size() - state.read_index;
+
     // If sync not found yet, search for it
     if (!state.sync_found) {
         // Need enough data to verify sync pattern
         size_t bytes_needed = E1_SYNC_INTERVAL * 4 + 1;  // Check 4 sync positions
-        if (state.buffer.size() < bytes_needed) {
+        if (available < bytes_needed) {
             return nullptr;
         }
 
@@ -74,20 +85,21 @@ const uint8_t* etina_extract_e1_frame(
 
                 // Lambda to extract byte at position with bit offset and inversion
                 auto extract_byte = [&](size_t pos) -> uint8_t {
-                    if (pos + 1 >= state.buffer.size()) return 0;
+                    size_t abs_pos = state.read_index + pos;
+                    if (abs_pos + 1 >= state.buffer.size()) return 0;
                     uint8_t result;
                     if (bit_offset == 0) {
-                        result = state.buffer[pos];
+                        result = state.buffer[abs_pos];
                     } else {
-                        result = (state.buffer[pos] << bit_offset) |
-                                 (state.buffer[pos + 1] >> (8 - bit_offset));
+                        result = (state.buffer[abs_pos] << bit_offset) |
+                                 (state.buffer[abs_pos + 1] >> (8 - bit_offset));
                     }
                     if (inverted) result ^= 0xFF;
                     return result;
                 };
 
-                // Search for sync pattern
-                for (size_t start = 0; start < 1024 && start + bytes_needed < state.buffer.size(); start++) {
+                // Search for sync pattern (128 covers 2 sync intervals after padding strip)
+                for (size_t start = 0; start < 128 && start + bytes_needed < available; start++) {
                     bool all_sync = true;
                     for (size_t frame = 0; frame < 4; frame++) {
                         size_t pos = start + frame * E1_SYNC_INTERVAL;
@@ -102,9 +114,9 @@ const uint8_t* etina_extract_e1_frame(
                         state.bit_offset = bit_offset;
                         state.inverted = inverted;
                         state.sync_start = start;
-                        // Remove bytes before sync start
-                        state.buffer.erase(state.buffer.begin(),
-                                          state.buffer.begin() + start);
+                        // Advance read_index past bytes before sync (O(1) vs O(n) erase)
+                        state.read_index += start;
+                        compact_e1_buffer(state);
                         break;
                     }
                 }
@@ -115,39 +127,51 @@ const uint8_t* etina_extract_e1_frame(
 
         if (!state.sync_found) {
             // No sync found - discard old data to prevent infinite growth
-            if (state.buffer.size() > 8192) {
-                state.buffer.erase(state.buffer.begin(),
-                                  state.buffer.begin() + 4096);
+            if (available > 8192) {
+                state.read_index += 4096;
+                compact_e1_buffer(state);
             }
             return nullptr;
         }
     }
 
+    // Recalculate available after potential read_index change
+    available = state.buffer.size() - state.read_index;
+
     // Sync found - extract aligned frames
     // Need E1_FRAME_SIZE bytes + 1 extra for bit shifting
-    if (state.buffer.size() < E1_FRAME_SIZE + 1) {
+    if (available < E1_FRAME_SIZE + 1) {
         return nullptr;
     }
 
     // Extract one aligned frame
     state.aligned_frame.resize(E1_FRAME_SIZE);
     for (size_t i = 0; i < E1_FRAME_SIZE; i++) {
+        size_t abs_i = state.read_index + i;
         uint8_t result;
         if (state.bit_offset == 0) {
-            result = state.buffer[i];
+            result = state.buffer[abs_i];
         } else {
-            result = (state.buffer[i] << state.bit_offset) |
-                     (state.buffer[i + 1] >> (8 - state.bit_offset));
+            result = (state.buffer[abs_i] << state.bit_offset) |
+                     (state.buffer[abs_i + 1] >> (8 - state.bit_offset));
         }
         if (state.inverted) result ^= 0xFF;
         state.aligned_frame[i] = result;
     }
 
-    // Remove processed bytes
-    state.buffer.erase(state.buffer.begin(),
-                      state.buffer.begin() + E1_FRAME_SIZE);
+    // Advance read_index past processed bytes (O(1) vs O(n) erase)
+    state.read_index += E1_FRAME_SIZE;
+    compact_e1_buffer(state);
 
     return state.aligned_frame.data();
+}
+
+// Helper: compact multiframe buffer when read_index is large
+static void compact_multiframe_buffer(EtinaMultiframeState& state) {
+    if (state.read_index > FRAMES_IN_MULTIFRAME * E1_FRAME_SIZE) {
+        state.frame_buffer.erase(state.frame_buffer.begin(), state.frame_buffer.begin() + state.read_index);
+        state.read_index = 0;
+    }
 }
 
 // Step 3: Accumulate E1 frames into multiframe
@@ -161,9 +185,12 @@ const uint8_t* etina_accumulate_multiframe(
                                   e1_frame, e1_frame + E1_FRAME_SIZE);
     }
 
+    // Available data after read_index
+    size_t available = state.frame_buffer.size() - state.read_index;
+
     // Need at least FRAMES_IN_MULTIFRAME + some extra for sync search
     size_t frames_needed = FRAMES_IN_MULTIFRAME + FRAMES_IN_BLOCK;
-    if (state.frame_buffer.size() < frames_needed * E1_FRAME_SIZE) {
+    if (available < frames_needed * E1_FRAME_SIZE) {
         return nullptr;
     }
 
@@ -175,12 +202,13 @@ const uint8_t* etina_accumulate_multiframe(
             bool valid = true;
             for (size_t block = 0; block < BLOCKS_IN_SUPERBLOCK && valid; block++) {
                 size_t frame_idx = frame_offset + block * FRAMES_IN_BLOCK;
-                if (frame_idx * E1_FRAME_SIZE + 1 >= state.frame_buffer.size()) {
+                size_t abs_pos = state.read_index + frame_idx * E1_FRAME_SIZE + 1;
+                if (abs_pos >= state.frame_buffer.size()) {
                     valid = false;
                     break;
                 }
 
-                uint8_t mgmt = state.frame_buffer[frame_idx * E1_FRAME_SIZE + 1];
+                uint8_t mgmt = state.frame_buffer[abs_pos];
                 uint8_t block_num = (mgmt >> 5) & 0x07;
                 uint8_t superblock_num = (mgmt >> 3) & 0x03;
 
@@ -195,11 +223,9 @@ const uint8_t* etina_accumulate_multiframe(
                 }
             }
             if (valid) {
-                // Found sync - remove preceding frames
-                if (frame_offset > 0) {
-                    state.frame_buffer.erase(state.frame_buffer.begin(),
-                                            state.frame_buffer.begin() + frame_offset * E1_FRAME_SIZE);
-                }
+                // Found sync - advance read_index past preceding frames (O(1) vs O(n) erase)
+                state.read_index += frame_offset * E1_FRAME_SIZE;
+                compact_multiframe_buffer(state);
                 state.multiframe_synced = true;
                 break;
             }
@@ -207,17 +233,21 @@ const uint8_t* etina_accumulate_multiframe(
 
         if (!state.multiframe_synced) {
             // No sync found - discard some old frames
-            if (state.frame_buffer.size() > FRAMES_IN_BLOCK * E1_FRAME_SIZE * 2) {
-                state.frame_buffer.erase(state.frame_buffer.begin(),
-                                        state.frame_buffer.begin() + FRAMES_IN_BLOCK * E1_FRAME_SIZE);
+            available = state.frame_buffer.size() - state.read_index;
+            if (available > FRAMES_IN_BLOCK * E1_FRAME_SIZE * 2) {
+                state.read_index += FRAMES_IN_BLOCK * E1_FRAME_SIZE;
+                compact_multiframe_buffer(state);
             }
             return nullptr;
         }
     }
 
+    // Recalculate available after potential read_index change
+    available = state.frame_buffer.size() - state.read_index;
+
     // Check if we have a complete multiframe
-    if (state.frame_buffer.size() >= FRAMES_IN_MULTIFRAME * E1_FRAME_SIZE) {
-        return state.frame_buffer.data();
+    if (available >= FRAMES_IN_MULTIFRAME * E1_FRAME_SIZE) {
+        return state.frame_buffer.data() + state.read_index;
     }
 
     return nullptr;
@@ -324,10 +354,9 @@ void etina_feed_payload(
             std::vector<uint8_t> eti_out(ETI_NI_FRAME_SIZE);
             etina_deinterleave_to_eti(state.deint, multiframe, eti_out.data());
 
-            // Remove processed multiframe
-            state.multiframe.frame_buffer.erase(
-                state.multiframe.frame_buffer.begin(),
-                state.multiframe.frame_buffer.begin() + FRAMES_IN_MULTIFRAME * E1_FRAME_SIZE);
+            // Advance read_index past processed multiframe (O(1) vs O(n) erase)
+            state.multiframe.read_index += FRAMES_IN_MULTIFRAME * E1_FRAME_SIZE;
+            compact_multiframe_buffer(state.multiframe);
 
             // Callback with ETI frame
             if (callback) {

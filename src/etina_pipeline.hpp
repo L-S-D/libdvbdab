@@ -39,6 +39,7 @@ const uint8_t* etina_strip_padding(
 // Step 2: Find E1 sync and extract aligned frames
 struct EtinaE1State {
     std::vector<uint8_t> buffer;
+    size_t read_index = 0;    // consume from here instead of erasing (O(1) vs O(n))
     std::vector<uint8_t> aligned_frame;  // holds current 32-byte frame
     int bit_offset = -1;      // -1 = not found yet
     bool inverted = false;
@@ -57,6 +58,7 @@ const uint8_t* etina_extract_e1_frame(
 // Step 3: Accumulate E1 frames into multiframe
 struct EtinaMultiframeState {
     std::vector<uint8_t> frame_buffer;
+    size_t read_index = 0;    // consume from here instead of erasing (O(1) vs O(n))
     bool multiframe_synced = false;
 };
 

@@ -22,12 +22,14 @@ struct PidState {
     bool active{false};          // Have we seen any packets on this PID?
     bool checked{false};         // Have we checked first PUSI for table_id?
     bool is_mpe{false};          // Confirmed as MPE (table_id 0x3E)?
+    bool is_bbf{false};          // Confirmed as BBF (0xB8 sync byte)?
     uint8_t last_cc{0xFF};       // Last continuity counter (0xFF = unknown)
     std::unique_ptr<MpeParser> mpe_parser;  // MPE section parser (created if MPE detected)
 
     // ETI-NA detection state
     int packet_count{0};         // Total packets seen on this PID
     int pusi_count{0};           // PUSI packets seen on this PID
+    int bbf_sync_count{0};       // Count of 0xB8 sync bytes seen (BBF detection)
     bool etina_candidate{false}; // True if no PUSI after threshold
     bool etina_checked{false};   // True if ETI-NA detection has been attempted
     std::unique_ptr<EtinaPipelineState> etina_pipeline;  // Modular ETI-NA pipeline
@@ -296,7 +298,8 @@ struct TsScanner::Impl {
 
         // TS NI V.11 detection: check for incrementing sequence byte on PUSI packets
         // Format: pointer_field=0, then incrementing "table_id" as frame sequence
-        if (!state.is_mpe && !state.tsni_checked && pusi && payload_len > 1) {
+        // Skip for BBF PIDs (BBF has no PUSI anyway, but be explicit)
+        if (!state.is_mpe && !state.is_bbf && !state.tsni_checked && pusi && payload_len > 1) {
             uint8_t pointer = payload[0];
             if (pointer == 0) {
                 uint8_t seq_byte = payload[1];  // The "table_id" is actually frame sequence
@@ -380,10 +383,21 @@ struct TsScanner::Impl {
             state.pusi_count++;
         }
 
+        // BBF detection: check for 0xB8 sync byte (BBF pseudo-TS)
+        // BBF also has no PUSI, but first payload byte is 0xB8 for frame start
+        if (!state.is_bbf && !pusi && payload_len > 0 && payload[0] == 0xB8) {
+            state.bbf_sync_count++;
+            if (state.bbf_sync_count >= 3) {
+                // Multiple 0xB8 sync bytes seen - this is BBF, not ETI-NA
+                state.is_bbf = true;
+            }
+        }
+
         // ETI-NA detection: check PIDs after threshold
-        // Try ETI-NA for any non-MPE, non-TSNI PID with enough traffic
-        if (!state.etina_checked && !state.is_mpe && !state.is_tsni &&
-            state.packet_count >= ETINA_PACKET_THRESHOLD) {
+        // ETI-NA streams have no PUSI flags - skip if any PUSI or BBF detected
+        if (!state.etina_checked && !state.is_mpe && !state.is_tsni && !state.is_bbf &&
+            state.packet_count >= ETINA_PACKET_THRESHOLD &&
+            state.pusi_count == 0) {
 
             // Try ETI-NA detection - will fail quickly if not ETI-NA format
             state.etina_candidate = true;

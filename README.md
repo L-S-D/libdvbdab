@@ -138,6 +138,141 @@ dvbdab_set_log_callback(my_log_handler, NULL);
 dvbdab_set_log_level(DVBDAB_LOG_DEBUG);
 ```
 
+## Standalone Tools
+
+### edi_info - EDI Stream Analyzer
+
+Analyzes EDI streams in BBF/GSE/MPE encapsulation. Detects audio codec (MP2 or DAB+) by analyzing the subchannel data directly, without requiring FIC.
+
+```bash
+./build/edi_info <format> <input.ts> [pid]
+```
+
+Example output:
+```
+=== EDI Stream Analysis ===
+File: dump.ts
+Format: bbf
+AF packets: 10813
+DAB mode: 1
+FIC present: NO
+
+=== Subchannels ===
+Index SCID  Bitrate   Codec       Frames    Header
+----------------------------------------------------------------------
+1     18    160 kbps  MP2         10813     ff fc 94 00 80 fe 44 33
+2     17    160 kbps  MP2         10813     ff fc 94 00 d0 90 34 34
+6     51    32 kbps   unknown     10813     8f 8f f1 ef 6f fb cf ed
+10    62    8 kbps    data        10813     c0 00 60 00 f0 12 74 34
+```
+
+### edi_extract - Audio Extractor
+
+Extracts raw audio from EDI subchannels without requiring FIC data.
+
+```bash
+./build/edi_extract <format> <input.ts> <subchannel> <output> [pid]
+```
+
+Arguments:
+- `format`: bbf, gse, or mpe
+- `subchannel`: index (1-64) or "all" for all audio channels
+- `output`: output file (or prefix for "all")
+- `pid`: PID for MPE format (default 3000)
+
+Examples:
+```bash
+# Extract single subchannel
+./build/edi_extract bbf input.ts 1 channel1.mp2
+
+# Extract all subchannels
+./build/edi_extract bbf input.ts all output_
+# Creates: output_1.mp2, output_2.mp2, ..., output_6.raw, ...
+```
+
+Output format is determined automatically:
+- `.mp2` for detected MPEG-1 Layer II audio
+- `.raw` for unknown codec (may be DAB+ or data)
+
+## FIC-less Stream Handling
+
+Some EDI streams do not include FIC (Fast Information Channel) data. Without FIC, ensemble and service labels cannot be discovered through normal means. However:
+
+- **edi_info** can still analyze subchannels by parsing est (subchannel) tags directly
+- **edi_extract** can extract raw audio data for manual analysis
+- Codec detection works by pattern matching:
+  - MP2: Look for 0xFFFC sync word (MPEG-1 Layer II)
+  - DAB+: Look for FireCode CRC in superframe header
+  - Data: Low bitrate (<16 kbps) subchannels
+
+## Stream Analysis: dump.ts (French Ensemble from 36E)
+
+This section documents findings from analyzing a FIC-less EDI stream captured from Eutelsat 36E (Russian satellite).
+
+### Stream Overview
+
+| Property | Value |
+|----------|-------|
+| File | dump.ts |
+| Size | 58 MB |
+| Format | BBF/GSE |
+| Source | Eutelsat 36E (PID 270) |
+| Multicast | 224.17.101.98:10198 |
+| AF packets | 10,813 |
+| FIC present | NO (ficf=0) |
+| Subchannels | 13 |
+| Content | French DAB ensemble |
+
+### Subchannel Analysis
+
+| Index | SCID | Bitrate | Codec | Notes |
+|-------|------|---------|-------|-------|
+| 1-5 | 14-18 | 160 kbps | MP2 | MPEG-1 Layer II, 48kHz stereo, playable |
+| 6-9 | 51-54 | 32 kbps | Unknown | See analysis below |
+| 10 | 62 | 8 kbps | Data | Time sync packets (t40/t41) |
+| 11-13 | 11-13 | 160 kbps | MP2 | MPEG-1 Layer II, 48kHz stereo, playable |
+
+### Unknown Format Analysis (Subchannels 6-9)
+
+The four 32 kbps subchannels (128 kbps total) contain an unidentified audio format:
+
+**Structure:**
+- 256-byte frames with `81 81 ff` sync word
+- 37-byte initial header before first frame
+- Zero padding at end of each frame
+- Additional `81 81 04` markers within payload
+
+**Statistics:**
+- Entropy: 7.17 bits/byte (highly compressed)
+- ~10,600 `81 81` patterns per subchannel
+
+**Ruled out:**
+- MP2 (no 0xFFFC sync)
+- DAB+ HE-AAC (no FireCode CRC)
+- ADTS AAC (no 0xFFF sync)
+- LATM AAC (no 0x56E sync)
+
+**Hypotheses:**
+1. MPEG Surround spatial audio (4 channels)
+2. Proprietary broadcaster format
+3. Scrambled/encrypted DAB+ audio
+
+### Data Channel (Subchannel 10)
+
+- 24-byte repeating blocks with CRC
+- Contains "t40"/"t41" identifiers
+- Likely time synchronization or tuning data
+
+### Commands Used
+
+```bash
+# Analyze stream
+./build/edi_info bbf dump.ts
+
+# Extract all audio
+./build/edi_extract bbf dump.ts all /tmp/output_
+```
+
 ## Architecture
 
 ```
