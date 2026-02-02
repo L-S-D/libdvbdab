@@ -312,11 +312,71 @@ endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
 # ============================================================================
 include(GNUInstallDirs)
 
+# Generate pkg-config file
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/dvbdab.pc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/dvbdab.pc
+    @ONLY
+)
+
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/dvbdab.pc
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+)
+
 install(TARGETS dvbdab
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
+# Public API headers
 install(DIRECTORY include/dvbdab
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+)
+
+# Internal headers needed for full streaming API
+install(FILES
+    src/ensemble_manager.hpp
+    src/dab_parser.h
+    src/dab_stream_parser.h
+    src/logging.h
+    src/etina_pipeline.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab
+)
+
+install(FILES
+    src/sources/gse_ts_source.hpp
+    src/sources/bbf_ts_source.hpp
+    src/sources/mpe_ts_source.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/sources
+)
+
+install(FILES
+    src/parsers/gse_parser.hpp
+    src/parsers/mpe_parser.hpp
+    src/parsers/udp_extractor.hpp
+    src/parsers/pf_reassembler.hpp
+    src/parsers/packet_decoder.hpp
+    src/parsers/mpe_section_accumulator.hpp
+    src/parsers/spi_parser.hpp
+    src/parsers/ehb_parser.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/parsers
+)
+
+install(FILES
+    src/output/ts_muxer.hpp
+    src/output/ts_streamer.hpp
+    src/output/dab_stream_processor.hpp
+    src/output/dabplus_decoder.hpp
+    src/output/dab_mp2_decoder.hpp
+    src/output/pad_decoder.hpp
+    src/output/metadata_bridge.hpp
+    src/output/spi_schedule_bridge.hpp
+    src/output/ehb_schedule_bridge.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/output
+)
+
+install(FILES
+    src/utils/crc_utils.hpp
+    src/utils/byte_utils.hpp
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/utils
 )

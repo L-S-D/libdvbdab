@@ -29,6 +29,9 @@ struct PF_Collector {
     uint16_t pseq = 0;
     uint32_t fcount = 0;
     uint32_t fragments_collected = 0;
+    bool fec = false;           // FEC enabled flag
+    uint8_t rsk = 0;            // RS k (data bytes per chunk)
+    uint8_t rsz = 0;            // RS z (trailing bytes to remove)
     bool processed = false;
     std::map<uint32_t, std::vector<uint8_t>> fragments;  // findex -> data
 };

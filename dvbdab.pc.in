@@ -1,0 +1,11 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: dvbdab
+Description: DAB/DAB+ receiver library for DVB satellite streams
+Version: 1.0.0
+Requires: pugixml
+Libs: -L${libdir} -ldvbdab -lpthread -lz
+Cflags: -I${includedir}
