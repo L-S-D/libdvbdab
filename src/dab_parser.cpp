@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <cstring>
 
 namespace dvbdab {
 
@@ -40,6 +41,75 @@ static int get_eep_bitrate(int subchsz, int protlvl) {
     return n * 8;
 }
 
+// EBU Latin character set to Unicode mapping (ETSI EN 300 401 Annex C)
+// Characters 0x80-0x9F differ from ISO 8859-1
+static const uint16_t ebu_latin_table[256] = {
+    // 0x00-0x7F: Same as ASCII
+    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
+    0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F,
+    0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
+    0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F,
+    0x0020, 0x0021, 0x0022, 0x0023, 0x00A4, 0x0025, 0x0026, 0x0027,  // 0x24 = currency sign
+    0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
+    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
+    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
+    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
+    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
+    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
+    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F,
+    0x0060, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
+    0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
+    0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
+    0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
+    // 0x80-0x9F: EBU Latin special characters
+    0x00E1, 0x00E0, 0x00E9, 0x00E8, 0x00ED, 0x00EC, 0x00F3, 0x00F2,  // áàéèíìóò
+    0x00FA, 0x00F9, 0x00D1, 0x00C7, 0x015E, 0x00DF, 0x00A1, 0x0132,  // úùÑÇŞß¡Ĳ
+    0x00E2, 0x00E4, 0x00EA, 0x00EB, 0x00EE, 0x00EF, 0x00F4, 0x00F6,  // âäêëîïôö
+    0x00FB, 0x00FC, 0x00F1, 0x00E7, 0x015F, 0x011F, 0x0131, 0x0133,  // ûüñçşğıĳ
+    // 0xA0-0xBF
+    0x00AA, 0x03B1, 0x00A9, 0x2030, 0x011E, 0x011B, 0x0148, 0x0151,  // ªα©‰Ğěňő
+    0x03C0, 0x20AC, 0x00A3, 0x0024, 0x2190, 0x2191, 0x2192, 0x2193,  // π€£$←↑→↓
+    0x00BA, 0x00B9, 0x00B2, 0x00B3, 0x00B1, 0x0130, 0x0144, 0x0171,  // º¹²³±İńű
+    0x00B5, 0x00BF, 0x00F7, 0x00B0, 0x00BC, 0x00BD, 0x00BE, 0x00A7,  // µ¿÷°¼½¾§
+    // 0xC0-0xDF
+    0x00C1, 0x00C0, 0x00C9, 0x00C8, 0x00CD, 0x00CC, 0x00D3, 0x00D2,  // ÁÀÉÈÍÌÓÒ
+    0x00DA, 0x00D9, 0x0158, 0x010C, 0x0160, 0x017D, 0x00D0, 0x013F,  // ÚÙŘČŠŽÐĿ
+    0x00C2, 0x00C4, 0x00CA, 0x00CB, 0x00CE, 0x00CF, 0x00D4, 0x00D6,  // ÂÄÊËÎÏÔÖ
+    0x00DB, 0x00DC, 0x0159, 0x010D, 0x0161, 0x017E, 0x0111, 0x0140,  // ÛÜřčšžđŀ
+    // 0xE0-0xFF
+    0x00C3, 0x00C5, 0x00C6, 0x0152, 0x0177, 0x00DD, 0x00D5, 0x00D8,  // ÃÅÆŒŷÝÕØ
+    0x00DE, 0x014A, 0x0154, 0x0106, 0x015A, 0x0179, 0x0166, 0x00F0,  // ÞŊŔĆŚŹŦð
+    0x00E3, 0x00E5, 0x00E6, 0x0153, 0x0175, 0x00FD, 0x00F5, 0x00F8,  // ãåæœŵýõø
+    0x00FE, 0x014B, 0x0155, 0x0107, 0x015B, 0x017A, 0x0167, 0x00FF   // þŋŕćśźŧÿ
+};
+
+// Append Unicode codepoint as UTF-8
+static void append_utf8(std::string& result, uint16_t cp) {
+    if (cp < 0x80) {
+        result += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        result += static_cast<char>(0xC0 | (cp >> 6));
+        result += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        result += static_cast<char>(0xE0 | (cp >> 12));
+        result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        result += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+// Convert EBU Latin (charset 0) to UTF-8
+static std::string ebu_latin_to_utf8(const char* src, size_t len) {
+    std::string result;
+    result.reserve(len * 3);
+
+    for (size_t i = 0; i < len && src[i] != '\0'; i++) {
+        unsigned char c = static_cast<unsigned char>(src[i]);
+        uint16_t cp = ebu_latin_table[c];
+        append_utf8(result, cp);
+    }
+    return result;
+}
+
 // Convert ISO 8859-1 (Latin-1) to UTF-8
 static std::string latin1_to_utf8(const char* src, size_t len) {
     std::string result;
@@ -55,6 +125,23 @@ static std::string latin1_to_utf8(const char* src, size_t len) {
         }
     }
     return result;
+}
+
+// Convert DAB label to UTF-8 based on charset
+static std::string dab_label_to_utf8(const char* src, size_t len, int charset) {
+    switch (charset) {
+        case 0:  // Complete EBU Latin
+        case 1:  // EBU Latin core
+        case 2:  // EBU Latin
+            return ebu_latin_to_utf8(src, len);
+        case 6:  // ISO 8859-1 (Latin-1)
+            return latin1_to_utf8(src, len);
+        case 15: // UTF-8
+            return std::string(src, strnlen(src, len));
+        default:
+            // Fall back to EBU Latin for unknown charsets
+            return ebu_latin_to_utf8(src, len);
+    }
 }
 
 DABParser::DABParser() : ensemble_id_(0), labelled_(false), basic_ready_(false),
@@ -249,12 +336,29 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
     if (fig_len < 1) return;
 
     int fig_type = (fig[-1] >> 5) & 0x07;
-    int ext = fig[0] & 0x1F;
-    int pd = (fig[0] >> 5) & 0x01;
+
+    // FIG type 0 and 1 have different first data byte structures
+    int ext, pd, charset;
+    if (fig_type == 0) {
+        // FIG 0: ext in bits 0-4, pd in bit 5, OE in bit 6, C/N in bit 7
+        ext = fig[0] & 0x1F;
+        pd = (fig[0] >> 5) & 0x01;
+        charset = 0;
+    } else if (fig_type == 1) {
+        // FIG 1: ext in bits 0-2, OE in bit 3, charset in bits 4-7
+        ext = fig[0] & 0x07;
+        pd = 0;
+        charset = (fig[0] >> 4) & 0x0F;
+    } else {
+        ext = 0;
+        pd = 0;
+        charset = 0;
+    }
 
     fig_debug_count_++;
 
     LOG_DEBUG(FIC, "FIG: type=" << fig_type << " ext=" << ext << " pd=" << pd
+             << " charset=" << charset
              << " len=" << fig_len << " hdr=0x" << std::hex << (int)fig[-1]
              << " first=0x" << (int)fig[0] << std::dec);
 
@@ -263,7 +367,7 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
             process_fig_0(fig + 1, fig_len - 1, ext, pd);
             break;
         case 1:
-            process_fig_1(fig + 1, fig_len - 1, ext);
+            process_fig_1(fig + 1, fig_len - 1, ext, charset);
             break;
     }
 }
@@ -553,7 +657,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
     }
 }
 
-void DABParser::process_fig_1(const uint8_t* data, int len, int ext) {
+void DABParser::process_fig_1(const uint8_t* data, int len, int ext, int charset) {
     if (len < 2) return;
 
     switch (ext) {
@@ -569,7 +673,7 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext) {
             while (end >= 0 && (label[end] == ' ' || label[end] == 0)) {
                 label[end--] = 0;
             }
-            ensemble_label_ = latin1_to_utf8(label, 16);
+            ensemble_label_ = dab_label_to_utf8(label, 16, charset);
 
             auto now = std::chrono::steady_clock::now();
             int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();
@@ -593,7 +697,7 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext) {
             while (end >= 0 && (label[end] == ' ' || label[end] == 0)) {
                 label[end--] = 0;
             }
-            service_labels_[sid] = latin1_to_utf8(label, 16);
+            service_labels_[sid] = dab_label_to_utf8(label, 16, charset);
 
             fig11_count_++;
 

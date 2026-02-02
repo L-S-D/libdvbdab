@@ -116,7 +116,7 @@ private:
     void process_fib(const uint8_t* fib);
     void process_fig(const uint8_t* fig, int fig_len);
     void process_fig_0(const uint8_t* data, int len, int ext, int pd);
-    void process_fig_1(const uint8_t* data, int len, int ext);
+    void process_fig_1(const uint8_t* data, int len, int ext, int charset);
 
     struct SubChannel {
         int subchid;
