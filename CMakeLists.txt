@@ -58,6 +58,9 @@ target_include_directories(dvbdab PUBLIC
 find_package(ZLIB REQUIRED)
 target_link_libraries(dvbdab pthread ZLIB::ZLIB ${PUGIXML_LIBRARIES})
 target_link_directories(dvbdab PUBLIC ${PUGIXML_LIBRARY_DIRS})
+# linked into position independent executables (tvheadend links with -pie),
+# also with compilers that do not build PIE by default
+set_target_properties(dvbdab PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ============================================================================
 # Standalone tools (only build when this is the top-level project)
