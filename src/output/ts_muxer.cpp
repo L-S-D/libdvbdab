@@ -4,6 +4,24 @@
 
 namespace dvbdab {
 
+/* A text of the SDT service descriptor (length byte + text). The labels are
+ * UTF-8: with a non-ASCII character the text starts with 0x15, the DVB
+ * character table selector for UTF-8 (EN 300 468 annex A) - without it
+ * receivers read the bytes as ISO 6937 / ISO 8859-1 and show mojibake */
+static void appendDvbString(std::vector<uint8_t>& section, const std::string& text)
+{
+    bool ascii = std::all_of(text.begin(), text.end(),
+                             [](char c) { return static_cast<unsigned char>(c) < 0x80; });
+    size_t n = std::min<size_t>(text.size(), ascii ? 255 : 254);
+    while (!ascii && n > 0 && n < text.size() &&
+           (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) {
+        n--;   // do not cut a character
+    }
+    section.push_back(static_cast<uint8_t>(n + (ascii ? 0 : 1)));
+    if (!ascii) section.push_back(0x15);
+    for (size_t i = 0; i < n; i++) section.push_back(static_cast<uint8_t>(text[i]));
+}
+
 TsMuxer::TsMuxer() = default;
 
 uint32_t TsMuxer::dvbCrc32(const uint8_t* data, size_t len) {
@@ -261,12 +279,10 @@ void TsMuxer::outputSdt() {
 
         // provider_name
         std::string provider = svc.provider.empty() ? provider_name_ : svc.provider;
-        section.push_back(static_cast<uint8_t>(provider.size()));
-        for (char c : provider) section.push_back(static_cast<uint8_t>(c));
+        appendDvbString(section, provider);
 
         // service_name
-        section.push_back(static_cast<uint8_t>(svc.name.size()));
-        for (char c : svc.name) section.push_back(static_cast<uint8_t>(c));
+        appendDvbString(section, svc.name);
 
         // Fill descriptor length
         section[desc_size_pos] = static_cast<uint8_t>(section.size() - desc_size_pos - 1);
