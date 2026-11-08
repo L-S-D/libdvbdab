@@ -18,6 +18,19 @@ struct dvbdab_scanner {
     TsScanner scanner;
 };
 
+/* A label as UTF-8 into the 17 bytes of the C structures: cut at a character
+ * boundary, so a multi-byte character is never split (invalid UTF-8 ends up
+ * in JSON and config files of the caller) */
+static void copy_label(char *dst, const std::string &src)
+{
+    size_t n = src.size() < 16 ? src.size() : 16;
+    while (n > 0 && n < src.size() && (static_cast<unsigned char>(src[n]) & 0xC0) == 0x80) {
+        n--;
+    }
+    memcpy(dst, src.data(), n);
+    dst[n] = '\0';
+}
+
 extern "C" {
 
 dvbdab_scanner_t *dvbdab_scanner_create(void)
@@ -94,8 +107,7 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
             auto& out = results->ensembles[i];
 
             out.eid = ens.eid;
-            strncpy(out.label, ens.label.c_str(), 16);
-            out.label[16] = '\0';
+            copy_label(out.label, ens.label);
             out.source_ip = ens.ip;
             out.source_port = ens.port;
             out.source_pid = ens.pid;
@@ -123,8 +135,7 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
                     auto& svc_out = out.services[j];
 
                     svc_out.sid = svc.sid;
-                    strncpy(svc_out.label, svc.label.c_str(), 16);
-                    svc_out.label[16] = '\0';
+                    copy_label(svc_out.label, svc.label);
                     svc_out.bitrate = svc.bitrate;
                     svc_out.subchannel_id = svc.subchannel_id;
                     svc_out.dabplus = svc.dabplus ? 1 : 0;
@@ -779,8 +790,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     try {
     const auto& ens = streamer->cached_ensemble;
     result->eid = ens.eid;
-    strncpy(result->label, ens.label.c_str(), 16);
-    result->label[16] = '\0';
+    copy_label(result->label, ens.label);
     result->source_ip = streamer->config.filter_ip;
     result->source_port = streamer->config.filter_port;
     result->source_pid = streamer->config.pid;
@@ -802,8 +812,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
             auto& out = result->services[i];
 
             out.sid = svc.sid;
-            strncpy(out.label, svc.label.c_str(), 16);
-            out.label[16] = '\0';
+            copy_label(out.label, svc.label);
             out.bitrate = svc.bitrate;
             out.subchannel_id = svc.subchannel_id;
             out.dabplus = svc.dabplus ? 1 : 0;
@@ -852,8 +861,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
         auto& out = result[idx++];
 
         out.eid = ens.eid;
-        strncpy(out.label, ens.label.c_str(), 16);
-        out.label[16] = '\0';
+        copy_label(out.label, ens.label);
         out.source_ip = key.ip;       /* Actual discovered IP from key */
         out.source_port = key.port;   /* Actual discovered port from key */
         out.source_pid = 0;           /* Not tracked per-ensemble for GSE */
@@ -875,8 +883,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
                 auto& svc_out = out.services[j];
 
                 svc_out.sid = svc.sid;
-                strncpy(svc_out.label, svc.label.c_str(), 16);
-                svc_out.label[16] = '\0';
+                copy_label(svc_out.label, svc.label);
                 svc_out.bitrate = svc.bitrate;
                 svc_out.subchannel_id = svc.subchannel_id;
                 svc_out.dabplus = svc.dabplus ? 1 : 0;
