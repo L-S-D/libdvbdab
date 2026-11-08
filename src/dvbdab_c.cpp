@@ -37,7 +37,10 @@ void dvbdab_scanner_destroy(dvbdab_scanner_t *scanner)
 void dvbdab_scanner_set_timeout(dvbdab_scanner_t *scanner, unsigned int timeout_ms)
 {
     if (scanner) {
-        scanner->scanner.setTimeout(timeout_ms);
+        try {
+            scanner->scanner.setTimeout(timeout_ms);
+        } catch (...) {
+        }
     }
 }
 
@@ -46,7 +49,11 @@ int dvbdab_scanner_feed(dvbdab_scanner_t *scanner, const uint8_t *data, size_t l
     if (!scanner || !data || len == 0) {
         return 1;
     }
-    return scanner->scanner.feed(data, len);
+    try {
+        return scanner->scanner.feed(data, len);
+    } catch (...) {
+        return 1;   /* an exception must not cross into C: stop scanning */
+    }
 }
 
 int dvbdab_scanner_is_done(dvbdab_scanner_t *scanner)
@@ -68,6 +75,8 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
     auto results = static_cast<dvbdab_results_t*>(calloc(1, sizeof(dvbdab_results_t)));
     if (!results) return nullptr;
 
+    /* no exception (bad_alloc, length_error) may cross into C */
+    try {
     // Get ensembles
     auto ensembles = scanner->scanner.getResults();
     results->ensemble_count = static_cast<int>(ensembles.size());
@@ -75,6 +84,10 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
     if (results->ensemble_count > 0) {
         results->ensembles = static_cast<dvbdab_ensemble_t*>(
             calloc(results->ensemble_count, sizeof(dvbdab_ensemble_t)));
+        if (!results->ensembles) {
+            dvbdab_results_free(results);
+            return nullptr;
+        }
 
         for (int i = 0; i < results->ensemble_count; i++) {
             const auto& ens = ensembles[i];
@@ -100,6 +113,10 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
             if (out.service_count > 0) {
                 out.services = static_cast<dvbdab_service_t*>(
                     calloc(out.service_count, sizeof(dvbdab_service_t)));
+                if (!out.services) {
+                    out.service_count = 0;
+                    continue;
+                }
 
                 for (int j = 0; j < out.service_count; j++) {
                     const auto& svc = ens.services[j];
@@ -123,6 +140,9 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
     if (results->etina_count > 0) {
         results->etina_streams = static_cast<dvbdab_etina_info_t*>(
             calloc(results->etina_count, sizeof(dvbdab_etina_info_t)));
+        if (!results->etina_streams) {
+            results->etina_count = 0;
+        }
 
         for (int i = 0; i < results->etina_count; i++) {
             const auto& e = etina[i];
@@ -136,6 +156,10 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
     }
 
     return results;
+    } catch (...) {
+        dvbdab_results_free(results);
+        return nullptr;
+    }
 }
 
 void dvbdab_results_free(dvbdab_results_t *results)
@@ -617,14 +641,18 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
     streamer->output_opaque = opaque;
 
     if (!streamer->processor) {
-        streamer->processor = std::make_unique<DabStreamProcessor>();
-        streamer->processor->setOutput([streamer](const uint8_t* data, size_t len) {
-            streamer->ts_output_count++;
-            streamer->ts_output_bytes += len;
-            if (streamer->output_cb) {
-                streamer->output_cb(streamer->output_opaque, data, len);
-            }
-        });
+        try {
+            streamer->processor = std::make_unique<DabStreamProcessor>();
+            streamer->processor->setOutput([streamer](const uint8_t* data, size_t len) {
+                streamer->ts_output_count++;
+                streamer->ts_output_bytes += len;
+                if (streamer->output_cb) {
+                    streamer->output_cb(streamer->output_opaque, data, len);
+                }
+            });
+        } catch (...) {
+            streamer->processor.reset();
+        }
     }
 }
 
@@ -632,6 +660,8 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
 {
     if (!streamer || !data || len == 0) return -1;
 
+    /* no exception (bad_alloc, length_error) may cross into C */
+    try {
     switch (streamer->config.format) {
     case DVBDAB_FORMAT_ETI_NA: {
         streamer->ts_buffer.insert(streamer->ts_buffer.end(), data, data + len);
@@ -703,7 +733,14 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
                     streamer->tsni_frame_buffer.insert(streamer->tsni_frame_buffer.end(),
                                                        payload + 1, payload + payload_len);
                 } else if (!streamer->tsni_frame_buffer.empty()) {
-                    // Continuation - append payload to frame buffer
+                    // Continuation - append payload to frame buffer; a frame is
+                    // TSNI_FRAME_SIZE bytes, a stream that never starts a new
+                    // one (no PUSI) must not grow it without bound
+                    if (streamer->tsni_frame_buffer.size() + payload_len >
+                        2 * streamer->TSNI_FRAME_SIZE) {
+                        streamer->tsni_frame_buffer.clear();
+                        return;
+                    }
                     streamer->tsni_frame_buffer.insert(streamer->tsni_frame_buffer.end(),
                                                        payload, payload + payload_len);
                 }
@@ -715,6 +752,9 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
     }
 
     return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 int dvbdab_streamer_is_ready(dvbdab_streamer_t *streamer)
@@ -736,6 +776,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     auto result = static_cast<dvbdab_ensemble_t*>(calloc(1, sizeof(dvbdab_ensemble_t)));
     if (!result) return nullptr;
 
+    try {
     const auto& ens = streamer->cached_ensemble;
     result->eid = ens.eid;
     strncpy(result->label, ens.label.c_str(), 16);
@@ -751,6 +792,10 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     if (result->service_count > 0) {
         result->services = static_cast<dvbdab_service_t*>(
             calloc(result->service_count, sizeof(dvbdab_service_t)));
+        if (!result->services) {
+            free(result);
+            return nullptr;
+        }
 
         for (int i = 0; i < result->service_count; i++) {
             const auto& svc = ens.services[i];
@@ -766,6 +811,10 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     }
 
     return result;
+    } catch (...) {
+        dvbdab_streamer_free_ensemble(result);
+        return nullptr;
+    }
 }
 
 void dvbdab_streamer_free_ensemble(dvbdab_ensemble_t *ensemble)
@@ -783,12 +832,15 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
         return nullptr;
     }
 
+    dvbdab_ensemble_t *result = nullptr;
+
+    try {
     auto all_ensembles = streamer->manager->getAllEnsembles();
     *count = static_cast<int>(all_ensembles.size());
 
     if (*count == 0) return nullptr;
 
-    auto result = static_cast<dvbdab_ensemble_t*>(
+    result = static_cast<dvbdab_ensemble_t*>(
         calloc(*count, sizeof(dvbdab_ensemble_t)));
     if (!result) {
         *count = 0;
@@ -813,6 +865,10 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
         if (out.service_count > 0) {
             out.services = static_cast<dvbdab_service_t*>(
                 calloc(out.service_count, sizeof(dvbdab_service_t)));
+            if (!out.services) {
+                out.service_count = 0;
+                continue;
+            }
 
             for (int j = 0; j < out.service_count; j++) {
                 const auto& svc = ens.services[j];
@@ -829,6 +885,11 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
     }
 
     return result;
+    } catch (...) {
+        dvbdab_streamer_free_all_ensembles(result, *count);
+        *count = 0;
+        return nullptr;
+    }
 }
 
 void dvbdab_streamer_free_all_ensembles(dvbdab_ensemble_t *ensembles, int count)
@@ -843,14 +904,22 @@ void dvbdab_streamer_free_all_ensembles(dvbdab_ensemble_t *ensembles, int count)
 int dvbdab_streamer_start_service(dvbdab_streamer_t *streamer, uint8_t subchannel_id)
 {
     if (!streamer || !streamer->processor) return -1;
-    streamer->processor->startService(subchannel_id);
+    try {
+        streamer->processor->startService(subchannel_id);
+    } catch (...) {
+        return -1;
+    }
     return 0;
 }
 
 int dvbdab_streamer_stop_service(dvbdab_streamer_t *streamer, uint8_t subchannel_id)
 {
     if (!streamer || !streamer->processor) return -1;
-    streamer->processor->stopService(subchannel_id);
+    try {
+        streamer->processor->stopService(subchannel_id);
+    } catch (...) {
+        return -1;
+    }
     return 0;
 }
 
@@ -880,8 +949,12 @@ int dvbdab_streamer_start_all(dvbdab_streamer_t *streamer)
     streamer->auto_start_all = true;
 
     // If ensemble already ready, start now
-    if (!streamer->cached_ensemble.services.empty()) {
-        return internal_start_all_services(streamer);
+    try {
+        if (!streamer->cached_ensemble.services.empty()) {
+            return internal_start_all_services(streamer);
+        }
+    } catch (...) {
+        return -1;
     }
 
     return 0;  // Will start later when ensemble is ready
