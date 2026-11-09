@@ -28,6 +28,10 @@ public:
     // Add a service
     void addService(const TsService& service);
 
+    // True if the service / sub-channel was added
+    bool hasService(uint16_t sid) const { return muxer_.hasService(sid); }
+    bool hasSubchannel(uint8_t subchannel_id) const { return subch_to_sid_.count(subchannel_id) != 0; }
+
     // Start decoding a service
     void startService(uint8_t subchannel_id);
 

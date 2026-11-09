@@ -323,16 +323,11 @@ struct dvbdab_streamer {
     DABEnsemble cached_ensemble;
 };
 
-// Helper to configure processor from ensemble
-static void setup_processor_from_ensemble(dvbdab_streamer* s, const DABEnsemble& ensemble) {
-    if (s->processor_initialized || !s->processor) return;
-
-    // Use config EID if provided, otherwise use discovered EID
-    uint16_t eid = (s->config.eid != 0) ? s->config.eid : ensemble.eid;
-    s->processor->setEnsemble(eid, ensemble.label, ensemble.label);
-
+// Add the services of the ensemble the processor does not have yet
+static void add_missing_services(dvbdab_streamer* s, const DABEnsemble& ensemble) {
     // Use subchannel_id for deterministic PID allocation
     for (const auto& svc : ensemble.services) {
+        if (s->processor->hasService(static_cast<uint16_t>(svc.sid))) continue;
         TsService cs;
         cs.sid = static_cast<uint16_t>(svc.sid);
         cs.pmt_pid = 0x0100 + svc.subchannel_id;
@@ -354,12 +349,33 @@ static void setup_processor_from_ensemble(dvbdab_streamer* s, const DABEnsemble&
 
         s->processor->addService(cs);
     }
+}
+
+// Helper to configure processor from ensemble
+static void setup_processor_from_ensemble(dvbdab_streamer* s, const DABEnsemble& ensemble) {
+    if (s->processor_initialized || !s->processor) return;
+
+    // Use config EID if provided, otherwise use discovered EID
+    uint16_t eid = (s->config.eid != 0) ? s->config.eid : ensemble.eid;
+    s->processor->setEnsemble(eid, ensemble.label, ensemble.label);
+
+    add_missing_services(s, ensemble);
 
     s->processor_initialized = true;
 }
 
 // Forward declaration
 static int internal_start_all_services(dvbdab_streamer* s);
+static void auto_start_services_if_ready(dvbdab_streamer* s);
+
+// The ensemble was complete after the processor was set up from the first
+// "basic ready" state, which can lack services whose FIG 0/2 came late: add
+// them now, so the PAT, PMT and SDT list all of them
+static void sync_processor_services(dvbdab_streamer* s, const DABEnsemble& ensemble) {
+    if (!s->processor || !s->processor_initialized) return;
+    add_missing_services(s, ensemble);
+    auto_start_services_if_ready(s);
+}
 
 // Called when processor is ready and auto_start_all is set
 static void auto_start_services_if_ready(dvbdab_streamer* s) {
@@ -417,6 +433,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        sync_processor_services(s, ens);
                         // Update ensemble name/provider now that label is available
                         uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
                         s->processor->setEnsemble(eid, ens.label, ens.label);
@@ -468,6 +485,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        sync_processor_services(s, ens);
                         // Update ensemble name/provider now that label is available
                         uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
                         s->processor->setEnsemble(eid, ens.label, ens.label);
@@ -519,6 +537,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        sync_processor_services(s, ens);
                         // Update ensemble name/provider now that label is available
                         uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
                         s->processor->setEnsemble(eid, ens.label, ens.label);
@@ -570,6 +589,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        sync_processor_services(s, ens);
                         // Update ensemble name/provider now that label is available
                         uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
                         s->processor->setEnsemble(eid, ens.label, ens.label);
@@ -610,6 +630,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                     s->cached_ensemble = ens;
                     s->complete = true;
                     if (s->processor) {
+                        sync_processor_services(s, ens);
                         // Update ensemble name/provider now that label is available
                         uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
                         s->processor->setEnsemble(eid, ens.label, ens.label);
@@ -911,6 +932,7 @@ void dvbdab_streamer_free_all_ensembles(dvbdab_ensemble_t *ensembles, int count)
 int dvbdab_streamer_start_service(dvbdab_streamer_t *streamer, uint8_t subchannel_id)
 {
     if (!streamer || !streamer->processor) return -1;
+    if (!streamer->processor->hasSubchannel(subchannel_id)) return -1;
     try {
         streamer->processor->startService(subchannel_id);
     } catch (...) {

@@ -42,6 +42,13 @@ void TsMuxer::addService(const TsService& service) {
     cc_[service.pmt_pid] = 0;
     cc_[service.audio_pid] = 0;
     frames_since_pcr_[service.audio_pid] = 0;
+
+    // The PAT and SDT that went out earlier do not list this service: a new
+    // version makes receivers read them again
+    if (last_psi_pts_ >= 0) {
+        pat_version_ = (pat_version_ + 1) & 0x1F;
+        sdt_version_ = (sdt_version_ + 1) & 0x1F;
+    }
 }
 
 void TsMuxer::updateServiceLabel(uint16_t sid, const std::string& name) {
