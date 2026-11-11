@@ -66,7 +66,8 @@ public:
     // Get all complete ensembles
     const std::map<StreamKey, DABEnsemble>& getEnsembles() const { return ensembles_; }
 
-    // Get all ensembles (complete or not) - for iterating all discovered streams
+    // Get all ensembles (complete or not) - the discovered streams whose FIC
+    // gave an ensemble id; other UDP streams (no DAB) are not in it
     std::map<StreamKey, DABEnsemble> getAllEnsembles() const;
 
     // Check if a specific stream is complete

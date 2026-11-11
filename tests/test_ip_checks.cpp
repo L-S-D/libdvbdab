@@ -1,5 +1,6 @@
 // Tests for the IPv4 checks of the UDP extraction: a header with a wrong
-// checksum or a UDP datagram that does not fit into its packet is dropped.
+// checksum or a UDP datagram that does not fit into its packet is dropped,
+// and a UDP stream without DAB is no ensemble of getAllEnsembles().
 
 #include "../src/parsers/udp_extractor.hpp"
 #include "../src/ensemble_manager.hpp"
@@ -81,6 +82,7 @@ int main() {
         check(m.getStreamCount() == 0, "a damaged header makes no stream");
         m.processIpPacket(p.data(), p.size());
         check(m.getStreamCount() == 1, "a right packet makes a stream");
+        check(m.getAllEnsembles().empty(), "a UDP stream without DAB is no ensemble");
     }
 
     std::printf("%s\n", failures ? "FAILED" : "all passed");

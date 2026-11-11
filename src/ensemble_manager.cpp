@@ -163,7 +163,12 @@ void EnsembleManager::processIpPacket(const uint8_t* ip_data, size_t len) {
 std::map<StreamKey, DABEnsemble> EnsembleManager::getAllEnsembles() const {
     std::map<StreamKey, DABEnsemble> result;
     for (const auto& [key, parser] : parsers_) {
-        result[key] = parser->get_ensemble();
+        // a parser is made for every UDP destination seen: only the ones
+        // whose FIC gave an ensemble id carry DAB (not some other data, and
+        // not a destination from a damaged header)
+        const DABEnsemble& ens = parser->get_ensemble();
+        if (ens.eid != 0)
+            result[key] = ens;
     }
     return result;
 }

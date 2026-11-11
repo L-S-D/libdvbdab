@@ -252,7 +252,8 @@ void dvbdab_streamer_free_ensemble(dvbdab_ensemble_t *ensemble);
 
 /**
  * Get all discovered ensembles (for discovery mode with filter_ip=0).
- * Returns all ensembles found by the EnsembleManager with their actual IPs.
+ * Returns all ensembles found by the EnsembleManager with their actual IPs:
+ * the UDP streams whose FIC gave an ensemble id (eid != 0), not other data.
  * Caller must free with dvbdab_streamer_free_all_ensembles().
  * @param streamer Streamer handle
  * @param count    Output: number of ensembles returned
