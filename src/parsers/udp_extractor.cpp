@@ -29,7 +29,15 @@ void UdpExtractor::process(const uint8_t* ip_packet, size_t len) {
     }
 }
 
-// Exact copy of standalone extractUdp logic
+bool ipv4HeaderChecksumOk(const uint8_t* header, size_t header_len) {
+    uint32_t sum = 0;
+    for (size_t i = 0; i + 1 < header_len; i += 2)
+        sum += (static_cast<uint32_t>(header[i]) << 8) | header[i + 1];
+    while (sum >> 16)
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    return sum == 0xFFFF;
+}
+
 bool extractUdpFromIpv4(const uint8_t* ip_packet, size_t len,
                         uint32_t& dst_ip, uint16_t& dst_port,
                         const uint8_t*& payload_ptr, size_t& payload_len) {
@@ -49,15 +57,19 @@ bool extractUdpFromIpv4(const uint8_t* ip_packet, size_t len,
     int ip_hdr = (ip_packet[0] & 0x0F) * 4;
     if (ip_hdr < 20 || (size_t)ip_hdr + 8 > len) return false;
 
+    // A damaged header: its destination is not the stream's
+    if (!ipv4HeaderChecksumOk(ip_packet, ip_hdr)) return false;
+
     // UDP header starts after IP header
     const uint8_t* udp = ip_packet + ip_hdr;
 
     // Extract destination port (bytes 2-3 of UDP header, big-endian)
     dst_port = (udp[2] << 8) | udp[3];
 
-    // Get UDP length directly from UDP header (no truncation)
+    // Get UDP length directly from UDP header (no truncation); the datagram
+    // must be in the packet, else the payload would be read past its end
     int udp_len = (udp[4] << 8) | udp[5];
-    if (udp_len < 8) return false;
+    if (udp_len < 8 || (size_t)ip_hdr + udp_len > len) return false;
 
     // Payload starts after 8-byte UDP header
     payload_ptr = udp + 8;

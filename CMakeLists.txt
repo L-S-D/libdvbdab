@@ -133,6 +133,18 @@ add_executable(test_ensemble_discovery
     src/logging.cpp
 )
 
+# Test the IPv4 checks of the UDP extraction (damaged headers, non-DAB streams)
+add_executable(test_ip_checks
+    tests/test_ip_checks.cpp
+    src/parsers/udp_extractor.cpp
+    src/parsers/pf_reassembler.cpp
+    src/parsers/mpe_section_accumulator.cpp
+    src/ensemble_manager.cpp
+    src/dab_parser.cpp
+    src/dab_stream_parser.cpp
+    src/logging.cpp
+)
+
 # Test DabStreamProcessor (full pipeline)
 add_executable(test_stream_processor
     tests/test_stream_processor.cpp

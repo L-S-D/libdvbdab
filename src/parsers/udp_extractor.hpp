@@ -32,8 +32,15 @@ private:
     size_t non_udp_count_{0};
 };
 
+// The IPv4 header checksum is right: the one's complement sum of the header
+// words, the checksum included, is 0xFFFF (RFC 791, RFC 1071). A damaged
+// header (lost or flipped bits on a weak signal) would else route the
+// payload to a stream that does not exist.
+bool ipv4HeaderChecksumOk(const uint8_t* header, size_t header_len);
+
 // Standalone function for simple extraction without callback management
-// Returns true if UDP was successfully extracted
+// Returns true if UDP was successfully extracted (an IPv4 header with a
+// right checksum, a UDP datagram that fits into the packet)
 // Fills dst_ip, dst_port, payload_ptr, payload_len on success
 bool extractUdpFromIpv4(const uint8_t* ip_packet, size_t len,
                         uint32_t& dst_ip, uint16_t& dst_port,

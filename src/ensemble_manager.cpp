@@ -1,4 +1,5 @@
 #include "ensemble_manager.hpp"
+#include "parsers/udp_extractor.hpp"
 #include <arpa/inet.h>
 
 namespace dvbdab {
@@ -130,6 +131,9 @@ void EnsembleManager::processIpPacket(const uint8_t* ip_data, size_t len) {
 
     // Check protocol (17 = UDP)
     if (ip_data[9] != 17) return;
+
+    // A damaged header: its destination is not the stream's
+    if (!ipv4HeaderChecksumOk(ip_data, static_cast<size_t>(ip_hdr_len))) return;
 
     // Extract destination IP (bytes 16-19)
     uint32_t dst_ip = (static_cast<uint32_t>(ip_data[16]) << 24) |
