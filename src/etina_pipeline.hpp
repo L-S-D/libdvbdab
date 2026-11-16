@@ -45,6 +45,8 @@ struct EtinaE1State {
     bool inverted = false;
     bool sync_found = false;
     size_t sync_start = 0;    // byte position where sync was found
+    size_t search_done = 0;   // sync start positions at read_index already checked, without a match
+    size_t unsynced_bytes = 0; // bytes fed while no sync was found
 };
 
 // Feed data and extract aligned E1 frames

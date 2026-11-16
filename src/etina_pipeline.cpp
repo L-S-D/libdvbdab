@@ -65,6 +65,9 @@ const uint8_t* etina_extract_e1_frame(
     // Add new data to buffer
     if (data && len > 0) {
         state.buffer.insert(state.buffer.end(), data, data + len);
+        if (!state.sync_found) {
+            state.unsynced_bytes += len;
+        }
     }
 
     // Available data after read_index
@@ -78,8 +81,15 @@ const uint8_t* etina_extract_e1_frame(
             return nullptr;
         }
 
+        // Start positions whose four sync bytes are in the buffer (128 covers 2 sync
+        // intervals after padding strip). Each one is checked once: the bytes it reads
+        // do not change until read_index moves, so search_done skips those already
+        // checked without a match by an earlier call.
+        size_t search_end = std::min<size_t>(128, available - bytes_needed);
+        size_t search_begin = state.search_done;
+
         // Try each bit offset and inversion
-        for (int bit_offset = 0; bit_offset < 8; bit_offset++) {
+        for (int bit_offset = 0; bit_offset < 8 && search_begin < search_end; bit_offset++) {
             for (int inv = 0; inv < 2; inv++) {
                 bool inverted = (inv == 1);
 
@@ -98,8 +108,8 @@ const uint8_t* etina_extract_e1_frame(
                     return result;
                 };
 
-                // Search for sync pattern (128 covers 2 sync intervals after padding strip)
-                for (size_t start = 0; start < 128 && start + bytes_needed < available; start++) {
+                // Search for sync pattern
+                for (size_t start = search_begin; start < search_end; start++) {
                     bool all_sync = true;
                     for (size_t frame = 0; frame < 4; frame++) {
                         size_t pos = start + frame * E1_SYNC_INTERVAL;
@@ -116,6 +126,7 @@ const uint8_t* etina_extract_e1_frame(
                         state.sync_start = start;
                         // Advance read_index past bytes before sync (O(1) vs O(n) erase)
                         state.read_index += start;
+                        state.search_done = 0;
                         compact_e1_buffer(state);
                         break;
                     }
@@ -126,9 +137,13 @@ const uint8_t* etina_extract_e1_frame(
         }
 
         if (!state.sync_found) {
+            if (search_end > state.search_done) {
+                state.search_done = search_end;
+            }
             // No sync found - discard old data to prevent infinite growth
             if (available > 8192) {
                 state.read_index += 4096;
+                state.search_done = 0;
                 compact_e1_buffer(state);
             }
             return nullptr;

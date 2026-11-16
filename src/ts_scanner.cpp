@@ -446,9 +446,12 @@ struct TsScanner::Impl {
                     }
                 });
 
-            // Check for failed detection (too much data without sync)
+            // Check for failed detection (too much data without sync). The E1 buffer
+            // itself never gets this large: without sync it drops 4 KB whenever more
+            // than 8 KB are waiting, so the bytes fed without sync are counted instead.
             if (state.etina_candidate && !state.etina_streaming &&
-                state.etina_pipeline->e1.buffer.size() > 16384) {
+                !state.etina_pipeline->e1.sync_found &&
+                state.etina_pipeline->e1.unsynced_bytes > 16384) {
                 // Too much data without producing ETI - not ETI-NA
                 state.etina_candidate = false;
                 state.etina_pipeline.reset();

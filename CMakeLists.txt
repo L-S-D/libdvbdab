@@ -145,6 +145,12 @@ add_executable(test_ip_checks
     src/logging.cpp
 )
 
+# Test the E1 sync search of the ETI-NA pipeline
+add_executable(test_etina_sync
+    tests/test_etina_sync.cpp
+    src/etina_pipeline.cpp
+)
+
 # Test DabStreamProcessor (full pipeline)
 add_executable(test_stream_processor
     tests/test_stream_processor.cpp
