@@ -108,6 +108,12 @@ add_executable(test_bbf_parser
     src/parsers/udp_extractor.cpp
 )
 
+# The IPv4 input (DVBDAB_FORMAT_IPV4) against the BBF_TS one (nrk_gse_capture.ts)
+add_executable(test_ipv4_input
+    tests/test_ipv4_input.cpp
+)
+target_link_libraries(test_ipv4_input dvbdab)
+
 # Test MPE parser with astra1-wdr.ts
 add_executable(test_mpe_parser
     tests/test_mpe_parser.cpp

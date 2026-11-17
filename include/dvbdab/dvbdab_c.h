@@ -161,8 +161,13 @@ typedef enum {
     DVBDAB_FORMAT_MPE    = 1,  /* MPE/IP encapsulation */
     DVBDAB_FORMAT_GSE    = 2,  /* GSE encapsulation (in normal TS) */
     DVBDAB_FORMAT_BBF_TS = 3,  /* BBFrame-in-PseudoTS (from DMX_SET_FE_STREAM) */
-    DVBDAB_FORMAT_TSNI   = 4   /* TS NI V.11 encapsulation */
+    DVBDAB_FORMAT_TSNI   = 4,  /* TS NI V.11 encapsulation */
+    DVBDAB_FORMAT_IPV4   = 5   /* IPv4 packets the caller took out of their
+                                  encapsulation (GSE, MPE): one per feed */
 } dvbdab_format_t;
+
+/* the library has DVBDAB_FORMAT_IPV4 (1.1.0 on) */
+#define DVBDAB_HAVE_FORMAT_IPV4 1
 
 /* Opaque unified streamer handle - created with dvbdab_streamer_create() */
 typedef struct dvbdab_streamer dvbdab_streamer_t;
@@ -213,9 +218,11 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
 /**
  * Feed raw TS data to streamer.
  * The streamer will filter for the configured PID internally.
+ * DVBDAB_FORMAT_IPV4: one IPv4 packet (its UDP datagrams of the configured
+ * address and port, or of all of them for discovery, count).
  * @param streamer Streamer handle
- * @param data     Raw TS data (must start at sync byte 0x47)
- * @param len      Length in bytes (should be multiple of 188)
+ * @param data     Raw TS data (must start at sync byte 0x47), or an IPv4 packet
+ * @param len      Length in bytes (should be multiple of 188 for TS)
  * @return         0 on success, -1 on error
  */
 int dvbdab_streamer_feed(dvbdab_streamer_t *streamer,

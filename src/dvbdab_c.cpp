@@ -556,9 +556,12 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             break;
 
         case DVBDAB_FORMAT_BBF_TS:
+        case DVBDAB_FORMAT_IPV4:
             // BBF-in-PseudoTS: Raw BBFrames from DMX_SET_FE_STREAM -> IP -> EnsembleManager
-            // This is for GSE data delivered via the special demux mode
-            s->bbf_source = std::make_unique<BbfTsSource>();
+            // This is for GSE data delivered via the special demux mode.
+            // IPV4: the IPv4 packets the caller took out of GSE (or MPE) -> EnsembleManager
+            if (config->format == DVBDAB_FORMAT_BBF_TS)
+                s->bbf_source = std::make_unique<BbfTsSource>();
             s->manager = std::make_unique<EnsembleManager>();
 
             // Create UDP extractor
@@ -568,9 +571,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
                 });
 
             // Connect BbfTsSource -> UdpExtractor
-            s->bbf_source->setIpCallback([s](const uint8_t* ip_data, size_t len) {
-                s->udp_extractor->process(ip_data, len);
-            });
+            if (s->bbf_source)
+                s->bbf_source->setIpCallback([s](const uint8_t* ip_data, size_t len) {
+                    s->udp_extractor->process(ip_data, len);
+                });
 
             // Set ensemble callbacks
             s->manager->setBasicReadyCallback([s](const StreamKey& key, const DABEnsemble& ens) {
@@ -726,6 +730,11 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
     case DVBDAB_FORMAT_BBF_TS:
         if (!streamer->bbf_source) return -1;
         streamer->bbf_source->feed(data, len);
+        break;
+
+    case DVBDAB_FORMAT_IPV4:
+        if (!streamer->udp_extractor) return -1;
+        streamer->udp_extractor->process(data, len);
         break;
 
     case DVBDAB_FORMAT_TSNI: {
