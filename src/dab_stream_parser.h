@@ -1,13 +1,12 @@
 #pragma once
 /**
  * @file dab_stream_parser.h
- * @brief DAB stream parser - converts TS/MPE/EDI to ETI frames
+ * @brief DAB stream parser - converts EDI to ETI frames
  *
- * Data flow: TS packets → MPE sections → EDI/AF packets → ETI-NI frames
+ * Data flow: IPv4/UDP packets → EDI/AF packets → ETI-NI frames
  *
- * This parser handles the outer encapsulation layers:
- * - TS packet filtering by PID
- * - MPE section accumulation
+ * This parser handles the EDI layers (the IP packets come from the
+ * caller, which takes them out of their encapsulation: MPE, GSE):
  * - EDI PF fragment reassembly
  * - EDI AF packet parsing (tag decoding: *ptr, deti, est1-64)
  * - ETI-NI frame assembly (6144 bytes, ETSI EN 300 799)
@@ -19,7 +18,6 @@
 
 #include "dab_parser.h"
 #include "parsers/pf_reassembler.hpp"
-#include "parsers/mpe_section_accumulator.hpp"
 #include <array>
 #include <vector>
 #include <chrono>
@@ -63,20 +61,20 @@ struct EDI_Builder {
 };
 
 /**
- * @brief Complete DAB stream parser: TS → MPE → EDI → ETI → FIC/FIG
+ * @brief Complete DAB stream parser: IPv4/UDP → EDI → ETI → FIC/FIG
  *
- * Converts DVB transport stream containing DAB-over-IP (MPE encapsulation)
- * into ETI-NI frames. Internally uses DABParser for FIC/FIG parsing to
+ * Converts the EDI packets of one multicast stream (DAB-over-IP) into
+ * ETI-NI frames. Internally uses DABParser for FIC/FIG parsing to
  * extract ensemble and service information.
  *
  * Usage:
  * @code
- *   DABStreamParser parser(pid, ip, port);
+ *   DABStreamParser parser(ip, port);
  *   parser.setEtiCallback([](StreamKey key, const uint8_t* eti, size_t len, uint16_t dflc) {
  *       // Process ETI frame
  *   });
  *   while (!parser.is_complete()) {
- *       parser.process_ts_data(ts_data, len);
+ *       parser.process_ip_packet(ip_packet, len);
  *   }
  *   auto ensemble = parser.get_ensemble();
  * @endcode
@@ -85,30 +83,20 @@ class DABStreamParser {
 public:
     /**
      * @brief Construct parser for specific multicast stream
-     * @param target_pid  TS PID containing MPE sections
      * @param target_ip   Multicast IP (host byte order, e.g., 0xEFC70201 for 239.199.2.1)
      * @param target_port UDP port (e.g., 1234)
      */
-    DABStreamParser(uint16_t target_pid, uint32_t target_ip, uint16_t target_port);
+    DABStreamParser(uint32_t target_ip, uint16_t target_port);
     ~DABStreamParser();
 
     /// Reset parser state (clears all buffers and counters)
     void reset();
 
-    // Process TS packets (does MPE accumulation internally)
-    bool process_ts_data(const uint8_t* data, size_t len);
-
-    // Process a complete MPE section (skips MPE accumulation)
-    bool process_mpe_section(const uint8_t* section, size_t len);
-
     // Process raw EDI packet (PF or AF) directly
     bool process_edi_packet(const uint8_t* edi_data, size_t len);
 
-    // Process raw IP packet (for GSE streams)
+    // Process an IPv4 packet (its UDP payload: EDI)
     bool process_ip_packet(const uint8_t* ip_packet, size_t len);
-
-    // Store ring buffer data for deferred processing
-    void set_pending_ring_buffer(std::vector<uint8_t>&& data);
 
     // Get parsed ensemble info
     const DABEnsemble& get_ensemble() const;
@@ -129,8 +117,6 @@ public:
     void setEtiCallback(EtiFrameCallback cb) { eti_callback_ = std::move(cb); }
 
 private:
-    void handle_mpe_section(const uint8_t* section, size_t len);
-
     int handle_edi_packet(const uint8_t* pkt, size_t len);
     int handle_af_packet(const uint8_t* pkt, size_t len);
     int handle_pf_packet(const uint8_t* pkt, size_t len);
@@ -145,22 +131,15 @@ private:
     static uint16_t crc16(const uint8_t* data, size_t len);
     bool check_crc(const uint8_t* data, size_t len);
 
-    uint16_t target_pid_;
     uint32_t target_ip_;
     uint16_t target_port_;
     uint16_t last_af_seq_ = 0;
 
     // Statistics counters
-    size_t total_bytes_ = 0;
-    size_t ts_count_ = 0;
-    size_t target_pid_count_ = 0;
-    size_t non_sync_count_ = 0;
-    size_t mpe_count_ = 0;
+    size_t ip_count_ = 0;
 
     // Debug counters
-    int mpe_debug_count_ = 0;
     int edi_count_ = 0;
-    bool logged_first_mpe_ = false;
     int pf_count_ = 0;
     int af_assembled_count_ = 0;
     int af_process_count_ = 0;
@@ -169,20 +148,12 @@ private:
     int eti_count_ = 0;
     int crc_check_count_ = 0;
 
-    MPESectionAccumulator mpe_accum_;
     PF_Reassembler pf_reassembler_;
     EDI_Builder edi_;
     DABParser fic_parser_;
 
     std::array<uint8_t, ETI_NI_RAW_SIZE> eti_frame_{};
     EtiFrameCallback eti_callback_;
-
-    // Deferred ring buffer processing
-    std::vector<uint8_t> pending_ring_buffer_;
-    bool ring_buffer_pending_ = false;
-    bool ring_buffer_processed_ = false;
-    std::chrono::steady_clock::time_point ring_buffer_start_time_;
-    static constexpr int RING_BUFFER_DELAY_MS = 3000;
 };
 
 } // namespace dvbdab

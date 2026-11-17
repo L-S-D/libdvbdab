@@ -12,11 +12,14 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 - **Multiple Input Formats**
   | Format | Description | Source |
   |--------|-------------|--------|
-  | MPE | Multi-Protocol Encapsulation | DVB-S/S2 data carousel |
-  | GSE | Generic Stream Encapsulation | DVB-S2 baseband |
+  | IPv4 | DAB over IP (EDI in UDP) | IPv4 packets the caller took out of MPE or GSE |
   | ETI-NA | ETI Network Adapted | Direct ETI in TS |
   | TSNI | TS NI V.11 | ETI-NI with section headers |
-  | BBF-TS | BBFrame in pseudo-TS | DVB-S2 DMX_SET_FE_STREAM |
+
+  Since 2.0 the library takes no MPE, GSE or BBFrames: the receiver takes the
+  IPv4 packets out of them (tvheadend does) and feeds them one by one
+  (`DVBDAB_FORMAT_IPV4`). Up to 1.x the formats `DVBDAB_FORMAT_MPE`, `_GSE`
+  and `_BBF_TS` did it in the library; their numbers 1-3 stay unused.
 
 - **MPEG-TS Output**
   - Custom TS muxer (no FFmpeg dependency)
@@ -81,19 +84,20 @@ void ts_callback(const uint8_t* data, size_t len, void* opaque) {
 }
 
 int main() {
-    // Configure streamer for GSE format
+    // A streamer for the IPv4 packets of one EDI stream (host byte order)
     dvbdab_streamer_config_t config = {
-        .format = DVBDAB_FORMAT_GSE,
-        .filter_ip = inet_addr("239.199.2.1"),
+        .format = DVBDAB_FORMAT_IPV4,
+        .filter_ip = 0xEFC70201,    // 239.199.2.1
         .filter_port = 1234
     };
 
     dvbdab_streamer_t* streamer = dvbdab_streamer_create(&config);
     dvbdab_streamer_set_output(streamer, ts_callback, NULL);
 
-    // Feed TS packets from DVB tuner
-    while (read(tuner_fd, buffer, sizeof(buffer)) > 0) {
-        dvbdab_streamer_feed(streamer, buffer, sizeof(buffer));
+    // Feed the IPv4 packets, one per call, as the MPE or GSE decoder of
+    // the receiver gives them
+    while ((len = next_ipv4_packet(packet, sizeof(packet))) > 0) {
+        dvbdab_streamer_feed(streamer, packet, len);
 
         // Start output when ensemble info is ready
         if (dvbdab_streamer_is_basic_ready(streamer)) {
@@ -108,17 +112,19 @@ int main() {
 
 ### Scanner Example
 
-```c
+The scanner finds the ETI-NA and TS NI V.11 ensembles of a TS (DAB over IP
+is the caller's: its IPv4 packets go to a `DVBDAB_FORMAT_IPV4` streamer).
+
+```cpp
 #include <dvbdab/ts_scanner.hpp>
 
 dvbdab::TsScanner scanner;
-scanner.feed(ts_data, len);
+scanner.setTimeout(5000);
 
-if (scanner.isComplete()) {
-    auto results = scanner.getResults();
-    for (const auto& ensemble : results.ensembles) {
-        printf("Ensemble: %s (EID=0x%04x)\n",
-               ensemble.label.c_str(), ensemble.eid);
+if (scanner.feed(ts_data, len) != 0) {
+    for (const auto& ensemble : scanner.getResults()) {
+        printf("Ensemble: %s (EID=0x%04x, PID %u)\n",
+               ensemble.label.c_str(), ensemble.eid, ensemble.pid);
         for (const auto& service : ensemble.services) {
             printf("  Service: %s (SID=0x%04x, subch=%d)\n",
                    service.label.c_str(), service.sid, service.subchannel_id);
@@ -140,9 +146,13 @@ dvbdab_set_log_level(DVBDAB_LOG_DEBUG);
 
 ## Standalone Tools
 
+The tools and tests read MPE captures (`tests/support/mpe_ip_source.hpp`
+takes the IPv4 packets out of one PID); with 2.0 they no longer read GSE or
+BBFrame captures.
+
 ### edi_info - EDI Stream Analyzer
 
-Analyzes EDI streams in BBF/GSE/MPE encapsulation. Detects audio codec (MP2 or DAB+) by analyzing the subchannel data directly, without requiring FIC.
+Analyzes EDI streams in MPE captures. Detects audio codec (MP2 or DAB+) by analyzing the subchannel data directly, without requiring FIC.
 
 ```bash
 ./build/edi_info <format> <input.ts> [pid]
@@ -152,7 +162,7 @@ Example output:
 ```
 === EDI Stream Analysis ===
 File: dump.ts
-Format: bbf
+Format: mpe
 AF packets: 10813
 DAB mode: 1
 FIC present: NO
@@ -175,7 +185,7 @@ Extracts raw audio from EDI subchannels without requiring FIC data.
 ```
 
 Arguments:
-- `format`: bbf, gse, or mpe
+- `format`: mpe
 - `subchannel`: index (1-64) or "all" for all audio channels
 - `output`: output file (or prefix for "all")
 - `pid`: PID for MPE format (default 3000)
@@ -183,10 +193,10 @@ Arguments:
 Examples:
 ```bash
 # Extract single subchannel
-./build/edi_extract bbf input.ts 1 channel1.mp2
+./build/edi_extract mpe input.ts 1 channel1.mp2 3000
 
 # Extract all subchannels
-./build/edi_extract bbf input.ts all output_
+./build/edi_extract mpe input.ts all output_ 3000
 # Creates: output_1.mp2, output_2.mp2, ..., output_6.raw, ...
 ```
 
@@ -265,6 +275,8 @@ The four 32 kbps subchannels (128 kbps total) contain an unidentified audio form
 
 ### Commands Used
 
+With libdvbdab 1.x (2.0 reads no BBFrame captures):
+
 ```bash
 # Analyze stream
 ./build/edi_info bbf dump.ts
@@ -276,11 +288,11 @@ The four 32 kbps subchannels (128 kbps total) contain an unidentified audio form
 ## Architecture
 
 ```
-Input Sources                    Processing                      Output
-─────────────                    ──────────                      ──────
-MPE-TS ──► MpeTsSource ──┐
-GSE-TS ──► GseTsSource ──┼──► UdpExtractor ──► EnsembleManager ──┐
-BBF-TS ──► BbfTsSource ──┘                           │           │
+Input                            Processing                      Output
+─────                            ──────────                      ──────
+IPv4 (the caller's, from
+MPE or GSE) ─────────────────► UdpExtractor ──► EnsembleManager ──┐
+                                                     │           │
                                                      ▼           │
 ETI-NA ──► etina_pipeline ───────────────────────────┤           │
 TSNI   ──► tsni frame assembly ──────────────────────┘           │

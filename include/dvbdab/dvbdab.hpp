@@ -47,8 +47,8 @@ struct StreamKey {
     }
 };
 
-// IPv4 packet callback (common convergence point for all input sources)
-// All input formats (GSE-in-TS, BBF-in-PseudoTS, MPE-in-TS) produce IPv4 packets
+// IPv4 packet callback (DAB over IP: the caller takes the IPv4 packets out
+// of their encapsulation, MPE or GSE)
 using IpPacketCallback = std::function<void(const uint8_t* ip_packet, size_t len)>;
 
 // UDP packet callback (extracted from IPv4 by shared UDP extractor)
@@ -83,10 +83,6 @@ constexpr uint32_t ETI_FSYNC_EVEN = 0x073AB6;  // Even frames
 // TS packet constants
 constexpr size_t TS_PACKET_SIZE = 188;
 constexpr size_t TS_HEADER_SIZE = 4;
-
-// GSE constants
-constexpr size_t MAX_GSE_FRAGMENT_SIZE = 4096;
-constexpr int GSE_FRAGMENT_ID_COUNT = 256;
 
 // Utility functions
 inline std::string ipToString(uint32_t ip) {
@@ -150,51 +146,6 @@ struct DiscoveredEnsemble {
     }
 };
 
-// Input format for ensemble discovery
-enum class InputFormat {
-    MPE,    // MPE-in-TS (Astra, etc.) - requires PID
-    BBF,    // BBF-in-pseudoTS (NRK GSE via DVB-S2)
-    GSE     // GSE-in-TS
-};
-
-/**
- * Discover all DAB ensembles in a transport stream file.
- *
- * Scans the input file for DAB ensembles carried via EDI-over-UDP and returns
- * information about each discovered ensemble including IP:port, EID, and label.
- *
- * @param file_path     Path to input transport stream file
- * @param format        Input format (MPE, BBF, or GSE)
- * @param pid           PID to filter (only used for MPE format, default 3000)
- * @param timeout_ms    Maximum time to scan in milliseconds (default 20000 = 20 seconds)
- * @return              Vector of discovered ensembles (may be empty if none found)
- */
-std::vector<DiscoveredEnsemble> discoverEnsembles(
-    const std::string& file_path,
-    InputFormat format,
-    uint16_t pid = 3000,
-    unsigned int timeout_ms = 20000
-);
-
-/**
- * Discover all DAB ensembles from a file descriptor (e.g., DVB DVR device).
- *
- * Reads from the fd and scans for DAB ensembles carried via EDI-over-UDP.
- * Returns information about each discovered ensemble including IP:port, EID, and label.
- *
- * @param fd            File descriptor to read from (must be open and readable)
- * @param format        Input format (MPE, BBF, or GSE)
- * @param pid           PID to filter (only used for MPE format)
- * @param timeout_ms    Maximum time to scan in milliseconds
- * @return              Vector of discovered ensembles (may be empty if none found)
- */
-std::vector<DiscoveredEnsemble> discoverEnsemblesFromFd(
-    int fd,
-    InputFormat format,
-    uint16_t pid,
-    unsigned int timeout_ms
-);
-
 /**
  * Callback-fed ensemble discovery (for integration with table filter systems).
  *
@@ -222,10 +173,9 @@ public:
     EnsembleDiscovery& operator=(const EnsembleDiscovery&) = delete;
 
     /**
-     * Feed an IP packet (extracted from MPE section, table_id 0x3E).
-     *
-     * The section data should be the payload of the MPE section, which is
-     * a raw IPv4 packet containing UDP with EDI data.
+     * Feed an IPv4 packet (the caller took it out of its encapsulation:
+     * an MPE datagram section, table_id 0x3E, or a GSE PDU), UDP with EDI
+     * data.
      *
      * @param ip_data   IPv4 packet data
      * @param len       Length of IP packet

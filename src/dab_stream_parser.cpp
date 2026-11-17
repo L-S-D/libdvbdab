@@ -8,38 +8,18 @@
 
 namespace dvbdab {
 
-// Local TS helper
-static inline bool ts_is_sync(const uint8_t* ts) {
-    return ts[0] == 0x47;
-}
-
-DABStreamParser::DABStreamParser(uint16_t target_pid, uint32_t target_ip, uint16_t target_port)
-    : target_pid_(target_pid), target_ip_(target_ip), target_port_(target_port) {
+DABStreamParser::DABStreamParser(uint32_t target_ip, uint16_t target_port)
+    : target_ip_(target_ip), target_port_(target_port) {
     reset();
 }
 
 DABStreamParser::~DABStreamParser() = default;
 
 void DABStreamParser::reset() {
-    mpe_accum_.reset();
     pf_reassembler_.reset();
     fic_parser_.reset();
     edi_ = EDI_Builder{};
     last_af_seq_ = 0;
-    pending_ring_buffer_.clear();
-    ring_buffer_pending_ = false;
-    ring_buffer_processed_ = false;
-}
-
-void DABStreamParser::set_pending_ring_buffer(std::vector<uint8_t>&& data) {
-    if (!data.empty()) {
-        LOG_INFO(STREAM, "Processing " << data.size() / 188 << " ring buffer packets immediately");
-        process_ts_data(data.data(), data.size());
-        LOG_INFO(STREAM, "Ring buffer processing complete, services=" << fic_parser_.get_ensemble().services.size());
-    }
-    pending_ring_buffer_.clear();
-    ring_buffer_pending_ = false;
-    ring_buffer_processed_ = true;
 }
 
 uint16_t DABStreamParser::crc16(const uint8_t* data, size_t len) {
@@ -59,121 +39,6 @@ bool DABStreamParser::check_crc(const uint8_t* data, size_t len) {
              << (crc_from_packet == crc ? " OK" : " FAIL"));
 
     return crc_from_packet == crc;
-}
-
-bool DABStreamParser::process_ts_data(const uint8_t* data, size_t len) {
-    total_bytes_ += len;
-
-    for (size_t i = 0; i + TS_PACKET_SIZE <= len; i += TS_PACKET_SIZE) {
-        const uint8_t* ts = data + i;
-        if (!ts_is_sync(ts)) {
-            non_sync_count_++;
-            continue;
-        }
-        ts_count_++;
-
-        uint16_t pid = ts_get_pid(ts);
-        if (pid != target_pid_) {
-            continue;
-        }
-        target_pid_count_++;
-
-        if (target_pid_count_ == 1) {
-            LOG_INFO(STREAM, "First PID " << target_pid_ << " packet after " << total_bytes_ << " bytes");
-        }
-
-        mpe_accum_.process_ts_packet(ts);
-
-        while (mpe_accum_.has_section()) {
-            mpe_count_++;
-            LOG_DEBUG(STREAM, "MPE section #" << mpe_count_ << " size=" << mpe_accum_.get_section_size());
-            handle_mpe_section(mpe_accum_.get_section(), mpe_accum_.get_section_size());
-            mpe_accum_.pop_section();
-
-            if (fic_parser_.is_complete()) {
-                LOG_INFO(STREAM, "Complete after " << ts_count_ << " TS packets, " << mpe_count_ << " MPE, " << total_bytes_ << " bytes");
-                return true;
-            }
-        }
-    }
-    return fic_parser_.is_complete();
-}
-
-void DABStreamParser::handle_mpe_section(const uint8_t* section, size_t len) {
-    if (section[0] != 0x3E) return;
-
-    bool llc_snap = (section[1] & 0x08) != 0;
-    size_t ip_offset = llc_snap ? 20 : 12;
-
-    if (len < ip_offset + 28) return;
-
-    const uint8_t* ip = section + ip_offset;
-    mpe_debug_count_++;
-
-    if ((ip[0] >> 4) != 4) return;
-    if (ip[9] != 17) return;
-
-    uint32_t dst_ip = (ip[16] << 24) | (ip[17] << 16) | (ip[18] << 8) | ip[19];
-    const uint8_t* udp = ip + 20;
-    uint16_t dst_port = (udp[2] << 8) | udp[3];
-    uint16_t udp_len = (udp[4] << 8) | udp[5];
-
-    if (!logged_first_mpe_) {
-        LOG_INFO(STREAM, "First MPE packet dst=" << ((dst_ip >> 24) & 0xFF) << "."
-                 << ((dst_ip >> 16) & 0xFF) << "." << ((dst_ip >> 8) & 0xFF) << "." << (dst_ip & 0xFF)
-                 << ":" << dst_port << " target=" << ((target_ip_ >> 24) & 0xFF) << "."
-                 << ((target_ip_ >> 16) & 0xFF) << "." << ((target_ip_ >> 8) & 0xFF) << "."
-                 << (target_ip_ & 0xFF) << ":" << target_port_);
-        logged_first_mpe_ = true;
-    }
-
-    if (dst_ip != target_ip_ || dst_port != target_port_) return;
-
-    const uint8_t* edi_data = udp + 8;
-    size_t edi_len = udp_len - 8;
-
-    if (edi_len > 0 && edi_len <= len - 40) {
-        edi_count_++;
-        LOG_DEBUG(STREAM, "EDI packet #" << edi_count_ << " len=" << edi_len
-                 << " type=" << (char)edi_data[0] << (char)edi_data[1]);
-        handle_edi_packet(edi_data, edi_len);
-    }
-}
-
-bool DABStreamParser::process_mpe_section(const uint8_t* section, size_t len) {
-    if (len < 40) return fic_parser_.is_complete();
-    if (section[0] != 0x3E) return fic_parser_.is_complete();
-
-    bool llc_snap = (section[1] & 0x08) != 0;
-    size_t ip_offset = llc_snap ? 20 : 12;
-
-    if (len < ip_offset + 28) return fic_parser_.is_complete();
-
-    const uint8_t* ip = section + ip_offset;
-    if ((ip[0] >> 4) != 4) return fic_parser_.is_complete();
-    if (ip[9] != 17) return fic_parser_.is_complete();
-
-    const uint8_t* udp = ip + 20;
-    uint16_t udp_len = (udp[4] << 8) | udp[5];
-
-    const uint8_t* edi_data = udp + 8;
-    size_t edi_len = udp_len - 8;
-
-    mpe_count_++;
-
-    if (mpe_count_ <= 3 || mpe_count_ % 500 == 0) {
-        LOG_INFO(STREAM, "process_mpe_section: mpe_count=" << mpe_count_
-                 << " len=" << len << " ip_offset=" << ip_offset
-                 << " udp_len=" << udp_len << " edi_len=" << edi_len
-                 << " edi_type=" << (char)edi_data[0] << (char)edi_data[1]);
-    }
-
-    if (edi_len > 0 && edi_len <= len - ip_offset - 28) {
-        edi_count_++;
-        handle_edi_packet(edi_data, edi_len);
-    }
-
-    return fic_parser_.is_complete();
 }
 
 bool DABStreamParser::process_edi_packet(const uint8_t* edi_data, size_t len) {
@@ -204,10 +69,10 @@ bool DABStreamParser::process_ip_packet(const uint8_t* ip, size_t len) {
     const uint8_t* edi_data = udp + 8;
     size_t edi_len = udp_len - 8;
 
-    mpe_count_++;
+    ip_count_++;
 
-    if (mpe_count_ <= 3 || mpe_count_ % 500 == 0) {
-        LOG_INFO(STREAM, "process_ip_packet: mpe_count=" << mpe_count_
+    if (ip_count_ <= 3 || ip_count_ % 500 == 0) {
+        LOG_INFO(STREAM, "process_ip_packet: ip_count=" << ip_count_
                  << " len=" << len << " ip_hdr_len=" << ip_hdr_len
                  << " udp_len=" << udp_len << " edi_len=" << edi_len
                  << " edi_type=" << (char)edi_data[0] << (char)edi_data[1]);

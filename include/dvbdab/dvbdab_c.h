@@ -66,7 +66,8 @@ typedef struct {
     dvbdab_service_t *services; /* Array of services (freed by free_* functions) */
     /* Source type flags */
     int is_etina;           /* 1 if ETI-NA encapsulation */
-    int is_gse;             /* 1 if GSE encapsulation (BBFrame), 0 if MPE */
+    int is_gse;             /* 0 from the library; for the caller: 1 if its IPv4
+                               packets came from GSE (BBFrames), 0 if MPE */
     int is_tsni;            /* 1 if TS NI V.11 encapsulation */
     /* ETI-NA specific fields (valid when is_etina is true) */
     int etina_padding;      /* ETI-NA: leading 0xFF bytes */
@@ -148,7 +149,7 @@ void dvbdab_results_free(dvbdab_results_t *results);
 
 /* ============================================================================
  * Unified DAB Streaming API
- * Supports ETI-NA, MPE, and GSE encapsulation formats
+ * Supports ETI-NA, TS NI V.11 and IPv4 (DAB over IP: EDI in UDP)
  * Uses FFmpeg for proper TS output with PSI tables (PAT, PMT, SDT)
  * ============================================================================ */
 
@@ -158,9 +159,8 @@ typedef void (*dvbdab_ts_output_cb)(void *opaque, const uint8_t *data, size_t le
 /* DAB stream format */
 typedef enum {
     DVBDAB_FORMAT_ETI_NA = 0,  /* ETI-NA encapsulation */
-    DVBDAB_FORMAT_MPE    = 1,  /* MPE/IP encapsulation */
-    DVBDAB_FORMAT_GSE    = 2,  /* GSE encapsulation (in normal TS) */
-    DVBDAB_FORMAT_BBF_TS = 3,  /* BBFrame-in-PseudoTS (from DMX_SET_FE_STREAM) */
+    /* 1-3 were MPE, GSE and BBFrames in a pseudo TS (up to 1.x): the caller
+     * takes the IPv4 packets out of them now (DVBDAB_FORMAT_IPV4) */
     DVBDAB_FORMAT_TSNI   = 4,  /* TS NI V.11 encapsulation */
     DVBDAB_FORMAT_IPV4   = 5   /* IPv4 packets the caller took out of their
                                   encapsulation (GSE, MPE): one per feed */
@@ -168,13 +168,15 @@ typedef enum {
 
 /* the library has DVBDAB_FORMAT_IPV4 (1.1.0 on) */
 #define DVBDAB_HAVE_FORMAT_IPV4 1
+/* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
+#define DVBDAB_VERSION_MAJOR 2
 
 /* Opaque unified streamer handle - created with dvbdab_streamer_create() */
 typedef struct dvbdab_streamer dvbdab_streamer_t;
 
 /* Unified streamer configuration */
 typedef struct {
-    dvbdab_format_t format;     /* Stream format (ETI_NA, MPE, or GSE) */
+    dvbdab_format_t format;     /* Stream format (ETI_NA, TSNI, IPV4) */
     uint16_t pid;               /* PID containing DAB data */
 
     /* ETI-NA specific (only used when format == DVBDAB_FORMAT_ETI_NA) */
@@ -182,7 +184,7 @@ typedef struct {
     uint8_t eti_bit_offset;     /* Bit position of E1 sync (0-7) */
     uint8_t eti_inverted;       /* Signal is inverted */
 
-    /* MPE/GSE specific (only used when format == MPE or GSE) */
+    /* IPv4 specific (only used when format == IPV4) */
     uint32_t filter_ip;         /* Multicast IP to filter (host byte order) */
     uint16_t filter_port;       /* UDP port to filter */
 
@@ -192,7 +194,7 @@ typedef struct {
 
 /**
  * Create a new unified DAB streamer.
- * Supports ETI-NA, MPE, and GSE formats.
+ * Supports ETI-NA, TS NI V.11 and IPv4 (DAB over IP, EDI in UDP).
  * @param config Streamer configuration
  * @return Streamer handle, or NULL on error
  */

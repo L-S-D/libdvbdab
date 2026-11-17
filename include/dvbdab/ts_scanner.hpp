@@ -23,14 +23,12 @@ struct EtiNaDetectionInfo {
  * Transport Stream Scanner for DAB detection.
  *
  * Scans raw TS packets to automatically detect DAB ensembles carried via:
- *   - MPE (Multi-Protocol Encapsulation) - section-based, table_id 0x3E
  *   - ETI-NA (G.704/E1) - continuous mode, no PUSI, UK satellite feeds
+ *   - TS NI V.11 - ETI-NI frames with an incrementing sequence byte
  *
- * Detection flow for MPE:
- *   1. Scan ALL PIDs for MPE sections (table_id 0x3E)
- *   2. Extract IP:port destinations from MPE sections
- *   3. Detect ETI frames in UDP payloads
- *   4. Parse FIC for ensemble/service information
+ * DAB over IP (EDI in UDP, in MPE or GSE) is the caller's: it takes the
+ * IPv4 packets out of their encapsulation and gives them to a streamer of
+ * DVBDAB_FORMAT_IPV4 (or to EnsembleDiscovery).
  *
  * Detection flow for ETI-NA:
  *   1. Detect PIDs with no PUSI (continuous data)
@@ -88,12 +86,6 @@ public:
      * Check if any traffic was received.
      */
     bool hadTraffic() const;
-
-    /**
-     * Get list of MPE PIDs discovered during scan.
-     * Useful for debugging.
-     */
-    std::vector<uint16_t> getMpePids() const;
 
     /**
      * Get ETI-NA detection results.

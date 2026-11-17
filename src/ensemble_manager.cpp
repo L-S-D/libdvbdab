@@ -25,7 +25,7 @@ DABStreamParser& EnsembleManager::getParser(const StreamKey& key) {
     // Create new parser for this stream
     // Use dummy PID (0) since we're feeding EDI directly
     // IP is already in MSB-first format (same as extracted from packets)
-    auto parser = std::make_unique<DABStreamParser>(0, key.ip, key.port);
+    auto parser = std::make_unique<DABStreamParser>(key.ip, key.port);
 
     // Wire up ETI callback to forward frames to our callback
     parser->setEtiCallback([this](const StreamKey& key, const uint8_t* data, size_t len, uint16_t dflc) {

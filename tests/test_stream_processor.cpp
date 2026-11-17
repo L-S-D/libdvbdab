@@ -5,9 +5,7 @@
 #include "../src/output/dab_stream_processor.hpp"
 #include "../src/ensemble_manager.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/sources/mpe_ts_source.hpp"
-#include "../src/sources/bbf_ts_source.hpp"
-#include "../src/sources/gse_ts_source.hpp"
+#include "support/mpe_ip_source.hpp"
 #include <iostream>
 #include <fstream>
 #include <arpa/inet.h>
@@ -28,7 +26,7 @@ static bool parseFilter(const std::string& filter, uint32_t& ip, uint16_t& port)
 int main(int argc, char* argv[]) {
     if (argc < 5) {
         std::cerr << "Usage: " << argv[0] << " <format> <file.ts> <ip:port> <output.ts> [pid]\n";
-        std::cerr << "  format: mpe, bbf, or gse\n";
+        std::cerr << "  format: mpe\n";
         std::cerr << "  ip:port: multicast address (e.g. 228.10.1.5:10010)\n";
         std::cerr << "  pid: PID for MPE format (default 3000)\n";
         return 1;
@@ -112,18 +110,11 @@ int main(int argc, char* argv[]) {
     });
 
     // Set up input pipeline
-    std::unique_ptr<InputSource> source;
+    std::unique_ptr<test::MpeIpSource> source;
     if (strcmp(format, "mpe") == 0) {
-        auto mpe_source = std::make_unique<MpeTsSource>(mpe_pid);
-        mpe_source->setIpFilter(filter_ip, filter_port);
-        source = std::move(mpe_source);
+        source = std::make_unique<test::MpeIpSource>(mpe_pid);
+        source->setIpFilter(filter_ip, filter_port);
         std::cout << "Using MPE format (PID " << mpe_pid << ")\n";
-    } else if (strcmp(format, "bbf") == 0) {
-        source = std::make_unique<BbfTsSource>();
-        std::cout << "Using BBF (pseudo-TS) format\n";
-    } else if (strcmp(format, "gse") == 0) {
-        source = std::make_unique<GseTsSource>();
-        std::cout << "Using GSE format\n";
     } else {
         std::cerr << "Unknown format: " << format << "\n";
         return 1;

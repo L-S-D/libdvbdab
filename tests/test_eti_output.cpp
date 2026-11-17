@@ -1,5 +1,5 @@
-// Test full library pipeline: MpeTsSource → UdpExtractor → EdiParser → ETI frames
-#include "../src/sources/mpe_ts_source.hpp"
+// Test full library pipeline: test::MpeIpSource → UdpExtractor → EdiParser → ETI frames
+#include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
 #include "../src/edi_parser.hpp"
 #include <iostream>
@@ -129,7 +129,7 @@ int main(int argc, char* argv[]) {
     });
 
     // MPE source with IP filter
-    dvbdab::MpeTsSource source(mpe_pid);
+    dvbdab::test::MpeIpSource source(mpe_pid);
     source.setIpFilter(filter_ip, filter_port);
     source.setIpCallback([&](const uint8_t* ip_data, size_t len) {
         udp_extractor.process(ip_data, len);

@@ -269,9 +269,6 @@ static void ts_buffer_consume(std::vector<uint8_t>& ts_buffer, size_t consumed) 
  * Unified DAB Streaming Implementation
  * ============================================================================ */
 
-#include "sources/mpe_ts_source.hpp"
-#include "sources/gse_ts_source.hpp"
-#include "sources/bbf_ts_source.hpp"
 #include "ensemble_manager.hpp"
 #include "parsers/udp_extractor.hpp"
 
@@ -282,11 +279,6 @@ struct dvbdab_streamer {
     // Output callback
     dvbdab_ts_output_cb output_cb;
     void* output_opaque;
-
-    // Format-specific sources (input stage)
-    std::unique_ptr<MpeTsSource> mpe_source;
-    std::unique_ptr<GseTsSource> gse_source;
-    std::unique_ptr<BbfTsSource> bbf_source;  // For BBF-in-PseudoTS (DMX_SET_FE_STREAM)
 
     // ETI-NA modular pipeline state
     EtinaPipelineState etina_pipeline;
@@ -300,10 +292,10 @@ struct dvbdab_streamer {
     bool tsni_detected{false};  // True once TSNI is producing ETI frames
     static constexpr size_t TSNI_FRAME_SIZE = 6140;  // ETI-NI frame size
 
-    // UDP extraction (for MPE/GSE)
+    // UDP extraction (IPv4)
     std::unique_ptr<UdpExtractor> udp_extractor;
 
-    // DAB parsing - EnsembleManager for all formats (MPE/GSE/ETI-NA)
+    // DAB parsing - EnsembleManager for all formats (IPv4/ETI-NA/TSNI)
     std::unique_ptr<EnsembleManager> manager;
 
     // Unified stream processor (audio + EPG + TS muxing)
@@ -384,7 +376,7 @@ static void auto_start_services_if_ready(dvbdab_streamer* s) {
     internal_start_all_services(s);
 }
 
-// Shared ETI frame processing - used by all input formats (ETI-NA, MPE, GSE, TSNI)
+// Shared ETI frame processing - used by all input formats (ETI-NA, IPv4, TSNI)
 // All formats produce ETI frames that are processed identically here
 // Called via eti_callback from EnsembleManager
 static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t len) {
@@ -412,7 +404,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
         switch (config->format) {
         case DVBDAB_FORMAT_ETI_NA:
             // ETI-NA: TS -> etina_pipeline -> ETI-NI -> EnsembleManager -> audio
-            // Uses same EnsembleManager path as MPE/GSE for FIC parsing and callbacks
+            // Uses same EnsembleManager path as IPv4 for FIC parsing and callbacks
             s->manager = std::make_unique<EnsembleManager>();
 
             // Set ensemble callbacks - for ETI-NA the key is (pid, 0)
@@ -451,129 +443,15 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             });
             break;
 
-        case DVBDAB_FORMAT_MPE:
-            // MPE: TS -> MpeTsSource -> IP -> UdpExtractor -> UDP -> EnsembleManager -> ETI
-            s->mpe_source = std::make_unique<MpeTsSource>(config->pid);
-            s->mpe_source->setIpFilter(config->filter_ip, config->filter_port);
-            s->manager = std::make_unique<EnsembleManager>();
-
-            // Create UDP extractor: IP packets -> UDP payloads -> EnsembleManager
-            s->udp_extractor = std::make_unique<UdpExtractor>(
-                [s](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
-                    s->manager->processUdp(ip, port, payload, len);
-                });
-
-            // Connect MpeTsSource -> UdpExtractor
-            s->mpe_source->setIpCallback([s](const uint8_t* ip_data, size_t len) {
-                s->udp_extractor->process(ip_data, len);
-            });
-
-            // Set ensemble callbacks
-            s->manager->setBasicReadyCallback([s](const StreamKey& key, const DABEnsemble& ens) {
-                if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
-                    s->cached_ensemble = ens;
-                    s->basic_ready = true;
-                    if (s->processor) {
-                        setup_processor_from_ensemble(s, ens);
-                        auto_start_services_if_ready(s);
-                    }
-                }
-            });
-
-            s->manager->setCompleteCallback([s](const StreamKey& key, const DABEnsemble& ens) {
-                if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
-                    s->cached_ensemble = ens;
-                    s->complete = true;
-                    if (s->processor) {
-                        sync_processor_services(s, ens);
-                        // Update ensemble name/provider now that label is available
-                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
-                        s->processor->setEnsemble(eid, ens.label, ens.label);
-                        for (const auto& svc : ens.services) {
-                            s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
-                        }
-                    }
-                }
-            });
-
-            // ETI callback from EnsembleManager -> shared ETI processing
-            s->manager->setEtiCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t) {
-                if (key.ip != s->config.filter_ip || key.port != s->config.filter_port) return;
-                process_eti_frame(s, data, len);
-            });
-            break;
-
-        case DVBDAB_FORMAT_GSE:
-            // GSE: TS -> GseTsSource -> IP -> UdpExtractor -> UDP -> EnsembleManager -> ETI
-            // Note: GseTsSource extracts from all GSE data, filtering by IP is done at EnsembleManager level
-            s->gse_source = std::make_unique<GseTsSource>();
-            s->manager = std::make_unique<EnsembleManager>();
-
-            // Create UDP extractor
-            s->udp_extractor = std::make_unique<UdpExtractor>(
-                [s](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
-                    s->manager->processUdp(ip, port, payload, len);
-                });
-
-            // Connect GseTsSource -> UdpExtractor
-            s->gse_source->setIpCallback([s](const uint8_t* ip_data, size_t len) {
-                s->udp_extractor->process(ip_data, len);
-            });
-
-            // Set ensemble callbacks
-            s->manager->setBasicReadyCallback([s](const StreamKey& key, const DABEnsemble& ens) {
-                if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
-                    s->cached_ensemble = ens;
-                    s->basic_ready = true;
-                    if (s->processor) {
-                        setup_processor_from_ensemble(s, ens);
-                        auto_start_services_if_ready(s);
-                    }
-                }
-            });
-
-            s->manager->setCompleteCallback([s](const StreamKey& key, const DABEnsemble& ens) {
-                if (key.ip == s->config.filter_ip && key.port == s->config.filter_port) {
-                    s->cached_ensemble = ens;
-                    s->complete = true;
-                    if (s->processor) {
-                        sync_processor_services(s, ens);
-                        // Update ensemble name/provider now that label is available
-                        uint16_t eid = (s->config.eid != 0) ? s->config.eid : ens.eid;
-                        s->processor->setEnsemble(eid, ens.label, ens.label);
-                        for (const auto& svc : ens.services) {
-                            s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
-                        }
-                    }
-                }
-            });
-
-            // ETI callback from EnsembleManager -> shared ETI processing
-            s->manager->setEtiCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t) {
-                if (key.ip != s->config.filter_ip || key.port != s->config.filter_port) return;
-                process_eti_frame(s, data, len);
-            });
-            break;
-
-        case DVBDAB_FORMAT_BBF_TS:
         case DVBDAB_FORMAT_IPV4:
-            // BBF-in-PseudoTS: Raw BBFrames from DMX_SET_FE_STREAM -> IP -> EnsembleManager
-            // This is for GSE data delivered via the special demux mode.
-            // IPV4: the IPv4 packets the caller took out of GSE (or MPE) -> EnsembleManager
-            if (config->format == DVBDAB_FORMAT_BBF_TS)
-                s->bbf_source = std::make_unique<BbfTsSource>();
+            // the IPv4 packets the caller took out of their encapsulation
+            // (MPE, GSE) -> UDP -> EnsembleManager -> ETI
             s->manager = std::make_unique<EnsembleManager>();
 
             // Create UDP extractor
             s->udp_extractor = std::make_unique<UdpExtractor>(
                 [s](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
                     s->manager->processUdp(ip, port, payload, len);
-                });
-
-            // Connect BbfTsSource -> UdpExtractor
-            if (s->bbf_source)
-                s->bbf_source->setIpCallback([s](const uint8_t* ip_data, size_t len) {
-                    s->udp_extractor->process(ip_data, len);
                 });
 
             // Set ensemble callbacks
@@ -717,21 +595,6 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
         break;
     }
 
-    case DVBDAB_FORMAT_MPE:
-        if (!streamer->mpe_source) return -1;
-        streamer->mpe_source->feed(data, len);
-        break;
-
-    case DVBDAB_FORMAT_GSE:
-        if (!streamer->gse_source) return -1;
-        streamer->gse_source->feed(data, len);
-        break;
-
-    case DVBDAB_FORMAT_BBF_TS:
-        if (!streamer->bbf_source) return -1;
-        streamer->bbf_source->feed(data, len);
-        break;
-
     case DVBDAB_FORMAT_IPV4:
         if (!streamer->udp_extractor) return -1;
         streamer->udp_extractor->process(data, len);
@@ -826,8 +689,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     result->source_pid = streamer->config.pid;
     result->service_count = static_cast<int>(ens.services.size());
     result->is_etina = (streamer->config.format == DVBDAB_FORMAT_ETI_NA) ? 1 : 0;
-    result->is_gse = (streamer->config.format == DVBDAB_FORMAT_GSE ||
-                      streamer->config.format == DVBDAB_FORMAT_BBF_TS) ? 1 : 0;
+    result->is_gse = 0;  /* the caller knows (IPv4 from GSE or MPE) */
 
     if (result->service_count > 0) {
         result->services = static_cast<dvbdab_service_t*>(
@@ -894,10 +756,9 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
         copy_label(out.label, ens.label);
         out.source_ip = key.ip;       /* Actual discovered IP from key */
         out.source_port = key.port;   /* Actual discovered port from key */
-        out.source_pid = 0;           /* Not tracked per-ensemble for GSE */
+        out.source_pid = 0;           /* the caller knows */
         out.service_count = static_cast<int>(ens.services.size());
-        out.is_gse = (streamer->config.format == DVBDAB_FORMAT_GSE ||
-                      streamer->config.format == DVBDAB_FORMAT_BBF_TS) ? 1 : 0;
+        out.is_gse = 0;               /* the caller knows (IPv4 from GSE or MPE) */
         out.is_etina = 0;
 
         if (out.service_count > 0) {

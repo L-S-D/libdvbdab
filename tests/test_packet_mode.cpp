@@ -2,7 +2,7 @@
 // Targets SubChId=1 which carries EPG in WDR streams
 
 #include "../src/ensemble_manager.hpp"
-#include "../src/sources/mpe_ts_source.hpp"
+#include "support/mpe_ip_source.hpp"
 #include "../src/parsers/packet_decoder.hpp"
 #include <iostream>
 #include <fstream>
@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
     });
 
     // Create MPE source
-    MpeTsSource source(3000);  // PID 3000 for MPE
+    test::MpeIpSource source(3000);  // PID 3000 for MPE
 
     // Connect source to ensemble manager
     source.setIpCallback([&](const uint8_t* ip_packet, size_t len) {

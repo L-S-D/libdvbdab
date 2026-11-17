@@ -24,17 +24,11 @@ pkg_check_modules(PUGIXML REQUIRED pugixml)
 # Main libdvbdab static library
 # ============================================================================
 add_library(dvbdab STATIC
-    src/parsers/gse_parser.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/packet_decoder.cpp
     src/parsers/spi_parser.cpp
     src/parsers/ehb_parser.cpp
     src/parsers/pf_reassembler.cpp
-    src/parsers/mpe_section_accumulator.cpp
-    src/sources/gse_ts_source.cpp
-    src/sources/bbf_ts_source.cpp
-    src/sources/mpe_ts_source.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
     src/dab_stream_parser.cpp
@@ -67,72 +61,17 @@ set_target_properties(dvbdab PROPERTIES POSITION_INDEPENDENT_CODE ON)
 # ============================================================================
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
-# pts2bbf - extracts BBF from pseudo TS
-add_executable(pts2bbf src/pts2bbf.cpp)
-
-# bbf2udp_test - extracts UDP packets from BBF and shows stream summary
-add_executable(bbf2udp_test
-    src/bbf2udp_test.cpp
-    src/bbf2udp.cpp
-    src/udp2edi.cpp
-    src/edi_parser.cpp
-)
-
-# complete_test - full pipeline from TS to service labels with completeness
-add_executable(complete_test
-    src/complete_test.cpp
-    src/bbf2udp.cpp
-    src/udp2edi.cpp
-    src/edi_parser.cpp
-)
-
-# New library parsers
-add_library(dvbdab_parsers STATIC
-    src/parsers/gse_parser.cpp
-    src/parsers/udp_extractor.cpp
-)
-
-# Test GSE parser with live_gse_capture.bin
-add_executable(test_gse_parser
-    tests/test_gse_parser.cpp
-    src/sources/gse_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/udp_extractor.cpp
-)
-
-# Test BBF parser with nrk_gse_capture.ts
-add_executable(test_bbf_parser
-    tests/test_bbf_parser.cpp
-    src/sources/bbf_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/udp_extractor.cpp
-)
-
-# The IPv4 input (DVBDAB_FORMAT_IPV4) against the BBF_TS one (nrk_gse_capture.ts)
+# The IPv4 input (DVBDAB_FORMAT_IPV4), fed from an MPE capture (astra1-wdr.ts)
 add_executable(test_ipv4_input
     tests/test_ipv4_input.cpp
 )
 target_link_libraries(test_ipv4_input dvbdab)
 
-# Test MPE parser with astra1-wdr.ts
-add_executable(test_mpe_parser
-    tests/test_mpe_parser.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
-    src/parsers/udp_extractor.cpp
-)
-
 # Test ensemble discovery (full pipeline)
 add_executable(test_ensemble_discovery
     tests/test_ensemble_discovery.cpp
-    src/sources/gse_ts_source.cpp
-    src/sources/bbf_ts_source.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
-    src/parsers/mpe_section_accumulator.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
     src/dab_stream_parser.cpp
@@ -144,7 +83,6 @@ add_executable(test_ip_checks
     tests/test_ip_checks.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
-    src/parsers/mpe_section_accumulator.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
     src/dab_stream_parser.cpp
@@ -165,16 +103,10 @@ add_executable(test_stream_processor
     src/output/dabplus_decoder.cpp
     src/output/dab_mp2_decoder.cpp
     src/output/pad_decoder.cpp
-    src/sources/gse_ts_source.cpp
-    src/sources/bbf_ts_source.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/packet_decoder.cpp
     src/parsers/ehb_parser.cpp
     src/parsers/pf_reassembler.cpp
-    src/parsers/mpe_section_accumulator.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
     src/dab_stream_parser.cpp
@@ -185,12 +117,9 @@ target_link_libraries(test_stream_processor ZLIB::ZLIB)
 # Test packet mode extraction (EPG/data services)
 add_executable(test_packet_mode
     tests/test_packet_mode.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/packet_decoder.cpp
     src/parsers/pf_reassembler.cpp
-    src/parsers/mpe_section_accumulator.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
     src/dab_stream_parser.cpp
@@ -203,19 +132,9 @@ add_executable(test_fct_gaps
     tests/test_fct_gaps.cpp
 )
 
-# Test library MpeTsSource produces same results as standalone
-add_executable(test_library_mpe
-    tests/test_library_mpe.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
-    src/parsers/udp_extractor.cpp
-)
-
-# Test full library pipeline: MpeTsSource → UdpExtractor → EdiParser → ETI frames
+# Test full library pipeline: MPE capture → UdpExtractor → EdiParser → ETI frames
 add_executable(test_eti_output
     tests/test_eti_output.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/edi_parser.cpp
 )
@@ -223,8 +142,6 @@ add_executable(test_eti_output
 # Test superframe sync detection and firecode verification
 add_executable(test_superframe_sync
     tests/test_superframe_sync.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/edi_parser.cpp
 )
@@ -232,8 +149,6 @@ add_executable(test_superframe_sync
 # Test audio extraction from DAB/DAB+ subchannels
 add_executable(test_audio_extract
     tests/test_audio_extract.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/edi_parser.cpp
     src/output/dabplus_decoder.cpp
@@ -246,17 +161,9 @@ target_link_libraries(test_audio_extract ZLIB::ZLIB)
 # Detect subchannel type (DAB+ vs DAB/MP2 vs DATA)
 add_executable(test_subch_type
     tests/test_subch_type.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/edi_parser.cpp
 )
-
-# Test discoverEnsembles library function
-add_executable(test_discover
-    tests/test_discover.cpp
-)
-target_link_libraries(test_discover dvbdab)
 
 # Test TsScanner - auto-detect DAB ensembles from raw TS
 add_executable(test_ts_scanner
@@ -309,11 +216,6 @@ target_link_libraries(test_ehb_eit dvbdab)
 # edi_info - Analyze EDI streams and show subchannel info
 add_executable(edi_info
     src/edi_info.cpp
-    src/sources/bbf_ts_source.cpp
-    src/sources/gse_ts_source.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
     src/logging.cpp
@@ -322,11 +224,6 @@ add_executable(edi_info
 # edi_extract - Extract audio from EDI streams without FIC
 add_executable(edi_extract
     src/edi_extract.cpp
-    src/sources/bbf_ts_source.cpp
-    src/sources/gse_ts_source.cpp
-    src/sources/mpe_ts_source.cpp
-    src/parsers/gse_parser.cpp
-    src/parsers/mpe_parser.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
     src/logging.cpp
@@ -371,19 +268,9 @@ install(FILES
 )
 
 install(FILES
-    src/sources/gse_ts_source.hpp
-    src/sources/bbf_ts_source.hpp
-    src/sources/mpe_ts_source.hpp
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/sources
-)
-
-install(FILES
-    src/parsers/gse_parser.hpp
-    src/parsers/mpe_parser.hpp
     src/parsers/udp_extractor.hpp
     src/parsers/pf_reassembler.hpp
     src/parsers/packet_decoder.hpp
-    src/parsers/mpe_section_accumulator.hpp
     src/parsers/spi_parser.hpp
     src/parsers/ehb_parser.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/parsers

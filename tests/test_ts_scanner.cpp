@@ -65,19 +65,6 @@ int main(int argc, char* argv[]) {
     fclose(fp);
     std::cout << "\n\n";
 
-    // Show discovered MPE PIDs
-    auto mpe_pids = scanner.getMpePids();
-    if (!mpe_pids.empty()) {
-        std::cout << "MPE PIDs detected: ";
-        for (size_t i = 0; i < mpe_pids.size(); i++) {
-            if (i > 0) std::cout << ", ";
-            std::cout << mpe_pids[i] << " (0x" << std::hex << mpe_pids[i] << std::dec << ")";
-        }
-        std::cout << "\n\n";
-    } else {
-        std::cout << "No MPE PIDs detected.\n\n";
-    }
-
     // Show ETI-NA detection results (UK satellite DAB feeds)
     auto etina_results = scanner.getEtiNaResults();
     if (!etina_results.empty()) {

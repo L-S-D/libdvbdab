@@ -5,7 +5,7 @@
  * EDI streams. Works even when FIC data is not present.
  *
  * Usage: edi_extract <format> <input.ts> <subchannel> <output> [pid]
- *   format: bbf, gse, or mpe
+ *   format: mpe
  *   subchannel: subchannel index (1-64) or "all" for all audio
  *   output: output filename (or prefix if "all")
  *   pid: PID for MPE format (default 3000)
@@ -15,9 +15,7 @@
  *   - DAB+: AAC with ADTS headers (.aac) - requires fdk-aac
  */
 
-#include "sources/bbf_ts_source.hpp"
-#include "sources/gse_ts_source.hpp"
-#include "sources/mpe_ts_source.hpp"
+#include "../tests/support/mpe_ip_source.hpp"
 #include "parsers/udp_extractor.hpp"
 #include "parsers/pf_reassembler.hpp"
 #include "utils/byte_utils.hpp"
@@ -49,13 +47,13 @@ static bool looks_like_mp2(const uint8_t* data, size_t len) {
 
 static void print_usage(const char* prog) {
     std::cerr << "Usage: " << prog << " <format> <input.ts> <subchannel> <output> [pid]\n";
-    std::cerr << "  format: bbf, gse, or mpe\n";
+    std::cerr << "  format: mpe\n";
     std::cerr << "  subchannel: index (1-64) or 'all' for all audio channels\n";
     std::cerr << "  output: output file (or prefix for 'all')\n";
     std::cerr << "  pid: PID for MPE format (default 3000)\n";
     std::cerr << "\nExamples:\n";
-    std::cerr << "  " << prog << " bbf input.ts 1 channel1.mp2\n";
-    std::cerr << "  " << prog << " bbf input.ts all output_\n";
+    std::cerr << "  " << prog << " mpe input.ts 1 channel1.mp2 3000\n";
+    std::cerr << "  " << prog << " mpe input.ts all output_ 3000\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -80,15 +78,13 @@ int main(int argc, char* argv[]) {
     }
 
     // Create appropriate source
-    std::unique_ptr<InputSource> source;
-    if (strcmp(format, "bbf") == 0) {
-        source = std::make_unique<BbfTsSource>();
-    } else if (strcmp(format, "gse") == 0) {
-        source = std::make_unique<GseTsSource>();
-    } else if (strcmp(format, "mpe") == 0) {
-        source = std::make_unique<MpeTsSource>(mpe_pid);
+    // MPE captures only: the library takes IPv4 packets, GSE and BBFrames
+    // are the receiver's (since 2.0)
+    std::unique_ptr<dvbdab::test::MpeIpSource> source;
+    if (strcmp(format, "mpe") == 0) {
+        source = std::make_unique<dvbdab::test::MpeIpSource>(mpe_pid);
     } else {
-        std::cerr << "Unknown format: " << format << "\n";
+        std::cerr << "Unknown format: " << format << " (only mpe)\n";
         return 1;
     }
 
@@ -150,10 +146,6 @@ int main(int argc, char* argv[]) {
     std::vector<uint8_t> buffer(65536);
     while (file.read(reinterpret_cast<char*>(buffer.data()), buffer.size()) || file.gcount()) {
         source->feed(buffer.data(), file.gcount());
-    }
-
-    if (auto* bbf = dynamic_cast<BbfTsSource*>(source.get())) {
-        bbf->flush();
     }
 
     std::cout << "AF packets processed: " << af_count << std::endl;

@@ -1,9 +1,7 @@
-// Test full pipeline: Input Source → IPv4 → UDP → EDI → ETI → FIC → Ensemble
-// Works with all three input formats
+// Test full pipeline: MPE capture → IPv4 → UDP → EDI → ETI → FIC → Ensemble
+// (the library takes IPv4; GSE and BBFrames are the receiver's since 2.0)
 
-#include "../src/sources/gse_ts_source.hpp"
-#include "../src/sources/bbf_ts_source.hpp"
-#include "../src/sources/mpe_ts_source.hpp"
+#include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
 #include "../src/ensemble_manager.hpp"
 #include <iostream>
@@ -12,7 +10,7 @@
 
 void printUsage(const char* prog) {
     std::cerr << "Usage: " << prog << " <format> <file> [pid]\n";
-    std::cerr << "  format: gse, bbf, or mpe\n";
+    std::cerr << "  format: mpe\n";
     std::cerr << "  file: input file path\n";
     std::cerr << "  pid: PID for MPE format (default 3000)\n";
 }
@@ -58,17 +56,11 @@ int main(int argc, char* argv[]) {
         manager.processUdp(ip, port, payload, len);
     });
 
-    // Create appropriate input source
-    std::unique_ptr<dvbdab::InputSource> source;
+    // Create the input source
+    std::unique_ptr<dvbdab::test::MpeIpSource> source;
 
-    if (strcmp(format, "gse") == 0) {
-        source = std::make_unique<dvbdab::GseTsSource>();
-        std::cout << "Using GSE-in-TS format" << std::endl;
-    } else if (strcmp(format, "bbf") == 0) {
-        source = std::make_unique<dvbdab::BbfTsSource>();
-        std::cout << "Using BBF-in-pseudoTS format" << std::endl;
-    } else if (strcmp(format, "mpe") == 0) {
-        source = std::make_unique<dvbdab::MpeTsSource>(pid);
+    if (strcmp(format, "mpe") == 0) {
+        source = std::make_unique<dvbdab::test::MpeIpSource>(pid);
         std::cout << "Using MPE-in-TS format (PID " << pid << ")" << std::endl;
     } else {
         std::cerr << "Unknown format: " << format << std::endl;
@@ -97,11 +89,6 @@ int main(int argc, char* argv[]) {
             std::cout << "\nAll " << manager.getCompleteCount() << " ensembles complete!" << std::endl;
             break;
         }
-    }
-
-    // Flush BBF source if applicable
-    if (auto* bbf = dynamic_cast<dvbdab::BbfTsSource*>(source.get())) {
-        bbf->flush();
     }
 
     // Print final summary

@@ -1,10 +1,7 @@
 // TS Scanner - Auto-detect DAB ensembles from raw transport stream
 
 #include <dvbdab/ts_scanner.hpp>
-#include "parsers/mpe_parser.hpp"
-#include "parsers/udp_extractor.hpp"
 #include "etina_pipeline.hpp"
-#include "ensemble_manager.hpp"
 #include "dab_parser.h"
 #include <array>
 #include <chrono>
@@ -21,10 +18,8 @@ namespace dvbdab {
 struct PidState {
     bool active{false};          // Have we seen any packets on this PID?
     bool checked{false};         // Have we checked first PUSI for table_id?
-    bool is_mpe{false};          // Confirmed as MPE (table_id 0x3E)?
-    bool is_bbf{false};          // Confirmed as BBF (0xB8 sync byte)?
-    uint8_t last_cc{0xFF};       // Last continuity counter (0xFF = unknown)
-    std::unique_ptr<MpeParser> mpe_parser;  // MPE section parser (created if MPE detected)
+    bool is_mpe{false};          // MPE (table_id 0x3E): no ETI-NA, no TSNI
+    bool is_bbf{false};          // BBF (0xB8 sync byte): no ETI-NA
 
     // ETI-NA detection state
     int packet_count{0};         // Total packets seen on this PID
@@ -54,9 +49,6 @@ struct TsScanner::Impl {
     // Hybrid PID tracking: static array for O(1) lookup
     std::array<PidState, 8192> pids;
 
-    // List of PIDs that are confirmed MPE
-    std::vector<uint16_t> mpe_pids;
-
     // ETI-NA detection results
     std::vector<EtiNaDetectionInfo> etina_results;
     static constexpr int ETINA_PACKET_THRESHOLD = 100;  // Check for no-PUSI after this many packets
@@ -74,19 +66,6 @@ struct TsScanner::Impl {
     // Early exit tracking
     size_t total_packets{0};
     static constexpr unsigned int EARLY_EXIT_MS = 1000;  // Exit early after 1 second if no DAB found
-    static constexpr unsigned int MPE_EXIT_MS = 2000;    // Exit if MPE seen but no ensembles after 2 seconds
-
-    // Shared destination management
-    UdpExtractor udp_extractor;
-    EnsembleManager ensemble_manager;
-
-    // Track which PID each stream (IP:port) came from
-    std::map<StreamKey, uint16_t> stream_pid_map;
-    uint16_t current_pid{0};  // PID currently being processed (for UDP callback)
-
-    // Results storage - map by stream key for updates
-    std::map<StreamKey, DiscoveredEnsemble> results_map;
-    std::vector<DiscoveredEnsemble> results;  // Built from map on getResults()
 
     // Timing
     std::chrono::steady_clock::time_point start_time;
@@ -96,32 +75,6 @@ struct TsScanner::Impl {
 
     // Partial TS packet buffer
     std::vector<uint8_t> partial_ts;
-
-    // Helper to convert MPE ensemble to DiscoveredEnsemble
-    DiscoveredEnsemble toDiscovered(const StreamKey& key, const DABEnsemble& ens) {
-        DiscoveredEnsemble de;
-        de.ip = key.ip;
-        de.port = key.port;
-        de.eid = ens.eid;
-        de.label = ens.label;
-
-        // Look up which PID this stream came from
-        auto pid_it = stream_pid_map.find(key);
-        if (pid_it != stream_pid_map.end()) {
-            de.pid = pid_it->second;
-        }
-
-        for (const auto& svc : ens.services) {
-            DiscoveredService ds;
-            ds.sid = svc.sid;
-            ds.label = svc.label;
-            ds.bitrate = svc.bitrate;
-            ds.subchannel_id = static_cast<uint8_t>(svc.subchannel_id);
-            ds.dabplus = svc.dabplus;
-            de.services.push_back(ds);
-        }
-        return de;
-    }
 
     // Helper to convert ETI-NA ensemble to DiscoveredEnsemble
     DiscoveredEnsemble toDiscoveredEtina(uint16_t pid, const DABEnsemble& ens,
@@ -172,39 +125,8 @@ struct TsScanner::Impl {
     }
 
     Impl()
-        : udp_extractor([this](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
-              onUdp(ip, port, payload, len);
-          })
     {
         partial_ts.reserve(TS_PACKET_SIZE);
-
-        // Set up basic_ready callback - store partial results immediately
-        ensemble_manager.setBasicReadyCallback([this](const StreamKey& key, const DABEnsemble& ens) {
-            results_map[key] = toDiscovered(key, ens);
-        });
-
-        // Set up complete callback - update with full labels
-        ensemble_manager.setCompleteCallback([this](const StreamKey& key, const DABEnsemble& ens) {
-            results_map[key] = toDiscovered(key, ens);
-        });
-    }
-
-    void onUdp(uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
-        // Check for multicast IP (224.x.x.x - 239.x.x.x)
-        uint8_t first_octet = (ip >> 24) & 0xFF;
-        if (first_octet >= 224 && first_octet <= 239) {
-            // Record which PID this stream came from
-            StreamKey key{ip, port};
-            if (stream_pid_map.find(key) == stream_pid_map.end()) {
-                stream_pid_map[key] = current_pid;
-            }
-            ensemble_manager.processUdp(ip, port, payload, len);
-        }
-    }
-
-    void onIpPacket(uint16_t pid, const uint8_t* ip_data, size_t len) {
-        current_pid = pid;  // Track which PID this IP packet came from
-        udp_extractor.process(ip_data, len);
     }
 
     void processTsPacket(const uint8_t* ts) {
@@ -221,7 +143,6 @@ struct TsScanner::Impl {
         bool pusi = (ts[1] >> 6) & 1;     // Payload Unit Start Indicator
         uint16_t pid = ((ts[1] & 0x1F) << 8) | ts[2];
         uint8_t adapt_ctrl = (ts[3] >> 4) & 3;
-        uint8_t cc = ts[3] & 0x0F;
 
         // Skip packets with errors or null PID
         if (tei || pid == 0x1FFF) {
@@ -231,23 +152,7 @@ struct TsScanner::Impl {
         // Get PID state
         PidState& state = pids[pid];
 
-        // Initialize on first packet
-        if (!state.active) {
-            state.active = true;
-            state.last_cc = cc;
-        }
-
-        // Check continuity
-        if (state.last_cc != 0xFF) {
-            uint8_t expected = (state.last_cc + 1) & 0x0F;
-            if (cc != expected && adapt_ctrl != 0 && adapt_ctrl != 2) {
-                // CC discontinuity - reset MPE parser if exists
-                if (state.mpe_parser) {
-                    state.mpe_parser->reset();
-                }
-            }
-        }
-        state.last_cc = cc;
+        state.active = true;
 
         // Determine payload start
         size_t payload_start = TS_HEADER_SIZE;
@@ -268,7 +173,9 @@ struct TsScanner::Impl {
         size_t payload_len = TS_PACKET_SIZE - payload_start;
         const uint8_t* payload = ts + payload_start;
 
-        // MPE detection: check first PUSI packet for table_id 0x3E
+        // MPE: the first PUSI packet has table_id 0x3E. The library does not
+        // take MPE apart (the caller does: DVBDAB_FORMAT_IPV4), such a PID
+        // is just no ETI-NA or TSNI one.
         if (!state.checked && pusi && payload_len > 1) {
             state.checked = true;
 
@@ -279,21 +186,8 @@ struct TsScanner::Impl {
                 uint8_t table_id = payload[1 + pointer];
                 if (table_id == 0x3E) {
                     state.is_mpe = true;
-                    mpe_pids.push_back(pid);
-
-                    // Create MPE parser for this PID
-                    state.mpe_parser = std::make_unique<MpeParser>(
-                        [this, pid](const uint8_t* ip_data, size_t len) {
-                            onIpPacket(pid, ip_data, len);
-                        }
-                    );
                 }
             }
-        }
-
-        // Feed to MPE parser if this PID is MPE
-        if (state.is_mpe && state.mpe_parser) {
-            state.mpe_parser->feedTsPayload(payload, payload_len, pusi);
         }
 
         // TS NI V.11 detection: check for incrementing sequence byte on PUSI packets
@@ -383,7 +277,8 @@ struct TsScanner::Impl {
             state.pusi_count++;
         }
 
-        // BBF detection: check for 0xB8 sync byte (BBF pseudo-TS)
+        // BBF detection: check for 0xB8 sync byte (BBF pseudo-TS). The library
+        // does not take BBFrames apart (the caller does: DVBDAB_FORMAT_IPV4).
         // BBF also has no PUSI, but first payload byte is 0xB8 for frame start
         if (!state.is_bbf && !pusi && payload_len > 0 && payload[0] == 0xB8) {
             state.bbf_sync_count++;
@@ -506,12 +401,6 @@ struct TsScanner::Impl {
             return 1;
         }
 
-        // Check if all discovered MPE ensembles are complete (all labels received)
-        size_t mpe_complete_count = ensemble_manager.getCompleteCount();
-        size_t mpe_basic_count = results_map.size();
-        bool mpe_complete = (mpe_basic_count == 0) ||
-                           (mpe_complete_count > 0 && mpe_complete_count >= mpe_basic_count);
-
         // Check if all discovered ETI-NA ensembles are complete
         size_t etina_streaming_count = etina_streaming_pids.size();
         size_t etina_complete_count = etina_ensembles.size();
@@ -525,8 +414,8 @@ struct TsScanner::Impl {
                             (tsni_complete_count >= tsni_streaming_count);
 
         // If we have any DAB content and all are complete, we're done
-        bool has_content = (mpe_basic_count > 0) || (etina_streaming_count > 0) || (tsni_streaming_count > 0);
-        if (has_content && mpe_complete && etina_complete && tsni_complete) {
+        bool has_content = (etina_streaming_count > 0) || (tsni_streaming_count > 0);
+        if (has_content && etina_complete && tsni_complete) {
             done = true;
             return 1;
         }
@@ -534,21 +423,9 @@ struct TsScanner::Impl {
         // Early exit if no DAB found after 1 second
         // This avoids waiting for full timeout on streams with no DAB traffic
         if (static_cast<unsigned int>(elapsed_ms) >= EARLY_EXIT_MS &&
-            mpe_pids.empty() &&
             etina_streaming_pids.empty() &&
-            tsni_streaming_pids.empty() &&
-            results_map.empty()) {
-            // No MPE sections, no ETI-NA, no TSNI, no ensembles after 1 second - no DAB here
-            done = true;
-            return 1;
-        }
-
-        // Exit if MPE sections seen but no ensembles discovered after 3 seconds
-        // MPE table_id 0x3E is also used for non-DAB data broadcasting
-        if (static_cast<unsigned int>(elapsed_ms) >= MPE_EXIT_MS &&
-            !mpe_pids.empty() &&
-            results_map.empty()) {
-            // MPE without DAB ensembles - not DAB content
+            tsni_streaming_pids.empty()) {
+            // No ETI-NA, no TSNI after 1 second - no DAB here
             done = true;
             return 1;
         }
@@ -573,13 +450,9 @@ int TsScanner::feed(const uint8_t* data, size_t len) {
 }
 
 std::vector<DiscoveredEnsemble> TsScanner::getResults() {
-    // Build results from MPE ensembles
     std::vector<DiscoveredEnsemble> results;
-    results.reserve(impl_->results_map.size() + impl_->etina_ensembles.size() + impl_->tsni_ensembles.size());
-    for (const auto& [key, ens] : impl_->results_map) {
-        results.push_back(ens);
-    }
-    // Add ETI-NA ensembles
+    results.reserve(impl_->etina_ensembles.size() + impl_->tsni_ensembles.size());
+    // ETI-NA ensembles
     for (const auto& [pid, ens] : impl_->etina_ensembles) {
         results.push_back(ens);
     }
@@ -596,10 +469,6 @@ bool TsScanner::isDone() const {
 
 bool TsScanner::hadTraffic() const {
     return impl_->total_packets > 0;
-}
-
-std::vector<uint16_t> TsScanner::getMpePids() const {
-    return impl_->mpe_pids;
 }
 
 std::vector<EtiNaDetectionInfo> TsScanner::getEtiNaResults() const {

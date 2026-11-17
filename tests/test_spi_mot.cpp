@@ -4,7 +4,7 @@
 // If subchannel not specified, auto-detects from FIG 0/13 + FIG 0/2/3
 
 #include "ensemble_manager.hpp"
-#include "sources/mpe_ts_source.hpp"
+#include "support/mpe_ip_source.hpp"
 #include "parsers/packet_decoder.hpp"
 #include "parsers/ehb_parser.hpp"
 #include <iostream>
@@ -174,7 +174,7 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    MpeTsSource source(pid);
+    test::MpeIpSource source(pid);
     source.setIpCallback([&](const uint8_t* ip, size_t len) {
         manager.processIpPacket(ip, len);
     });

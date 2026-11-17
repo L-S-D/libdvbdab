@@ -1,5 +1,5 @@
 // Extract raw subchannel data and analyze for MP2/DAB+ signatures
-#include "../src/sources/mpe_ts_source.hpp"
+#include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
 #include "../src/edi_parser.hpp"
 #include <iostream>
@@ -115,7 +115,7 @@ int main(int argc, char* argv[]) {
         edi_parser.feed(payload, len);
     });
 
-    dvbdab::MpeTsSource source(mpe_pid);
+    dvbdab::test::MpeIpSource source(mpe_pid);
     source.setIpFilter(filter_ip, filter_port);
     source.setIpCallback([&](const uint8_t* ip_data, size_t len) {
         udp_extractor.process(ip_data, len);
