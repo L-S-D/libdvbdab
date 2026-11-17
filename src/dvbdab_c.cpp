@@ -448,9 +448,13 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             // (MPE, GSE) -> UDP -> EnsembleManager -> ETI
             s->manager = std::make_unique<EnsembleManager>();
 
-            // Create UDP extractor
+            // Create UDP extractor. With a filter only its stream gets parsed:
+            // a GSE stream (an MPE PID) can carry several ensembles.
             s->udp_extractor = std::make_unique<UdpExtractor>(
                 [s](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
+                    if (s->config.filter_ip &&
+                        (ip != s->config.filter_ip || port != s->config.filter_port))
+                        return;
                     s->manager->processUdp(ip, port, payload, len);
                 });
 
