@@ -63,6 +63,9 @@ public:
     // sampling rate of the AAC core
     int64_t getAuDuration90k() const;
 
+    // The real length of an AU in 90 kHz units (960 samples of the core)
+    int64_t getRealAuDuration90k() const;
+
     // Set callback for DLS text updates
     void setDLSCallback(DLSUpdateCallback cb);
 

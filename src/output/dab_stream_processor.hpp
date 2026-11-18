@@ -47,6 +47,11 @@ public:
     // services are added
     void setAacOutput(int mode);
 
+    // The output PIDs the user takes (count < 0: all, the default). With
+    // transcoding, the DAB+ audio of a service is decoded and encoded again
+    // only while its PMT or audio PID is among them; else it is not put out.
+    void setWantedPids(const uint16_t* pids, int count);
+
     // Feed an ETI-NI frame - THE main entry point
     // Handles audio decoding, EPG extraction, and TS output
     void feedEtiFrame(const uint8_t* eti_ni, size_t len);
@@ -112,6 +117,10 @@ private:
     // frame number each MP2 subchannel got
     int aac_output_{0};
     std::map<uint8_t, std::unique_ptr<AacTranscoder>> transcoders_;
+    bool wanted_all_{true};
+    std::set<uint16_t> wanted_pids_;
+    bool isWanted(const TsService& svc) const;
+    void makeTranscoder(const TsService& svc);
     int last_fct_{-1};
     int64_t frame_no_{0};
     std::map<uint8_t, int64_t> mp2_last_frame_;

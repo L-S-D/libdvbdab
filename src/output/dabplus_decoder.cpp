@@ -101,6 +101,12 @@ int64_t DabPlusDecoder::getAuDuration90k() const {
     return static_cast<int64_t>(latm_ ? 960 : 1024) * 90000 / core_rate;
 }
 
+int64_t DabPlusDecoder::getRealAuDuration90k() const {
+    int out_rate = params_.dac_rate ? 48000 : 32000;
+    int core_rate = params_.sbr_flag ? out_rate / 2 : out_rate;
+    return static_cast<int64_t>(960) * 90000 / core_rate;
+}
+
 size_t DabPlusDecoder::buildLatmFrame(uint8_t* out, const uint8_t* au, size_t len) {
     // sampling frequency indices: 48000 3, 32000 5, 24000 6, 16000 8
     int out_rate_idx = params_.dac_rate ? 3 : 5;

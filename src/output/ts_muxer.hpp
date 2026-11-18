@@ -145,6 +145,13 @@ public:
      */
     void feedAudioFrame(uint8_t subchannel_id, const uint8_t* data, size_t len, int64_t pts);
 
+    /**
+     * @brief The time line of the output reached pts, with no audio frame
+     *        put out (one not wanted): PAT, PMT, SDT and EIT go out on time
+     * @param pts Presentation timestamp in 90kHz units (real time)
+     */
+    void tick(int64_t pts);
+
     /// @}
 
     /// @name Metadata Updates

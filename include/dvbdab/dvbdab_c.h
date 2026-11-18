@@ -183,6 +183,8 @@ typedef enum {
  * AUs become silence of their length. Only if dvbdab_aac_transcode() says
  * so, else ADTS */
 #define DVBDAB_AAC_TRANSCODE  2
+/* the streamer has dvbdab_streamer_set_wanted_pids() (2.2.0 on) */
+#define DVBDAB_HAVE_WANTED_PIDS 1
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
@@ -322,6 +324,20 @@ int dvbdab_streamer_start_service(dvbdab_streamer_t *streamer,
  */
 int dvbdab_streamer_stop_service(dvbdab_streamer_t *streamer,
                                   uint8_t subchannel_id);
+
+/**
+ * The PIDs of the output the caller takes (count < 0: all, the default).
+ * With DVBDAB_AAC_TRANSCODE, the DAB+ audio of a service is decoded and
+ * encoded again only while its PMT or audio PID is among them; the other
+ * services have no audio in the output (they stay in PAT, PMT and SDT).
+ * Any time, from the thread that feeds the streamer.
+ * @param streamer Streamer handle
+ * @param pids     The PIDs (count of them; NULL with count <= 0)
+ * @param count    Their number, < 0 for all
+ * @return         0 on success, -1 on error
+ */
+int dvbdab_streamer_set_wanted_pids(dvbdab_streamer_t *streamer,
+                                    const uint16_t *pids, int count);
 
 /**
  * Start streaming all services in the ensemble.

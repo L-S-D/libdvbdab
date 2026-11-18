@@ -1,4 +1,5 @@
 #include "dab_stream_processor.hpp"
+#include "../logging.h"
 #include <algorithm>
 #include <cctype>
 
@@ -62,6 +63,41 @@ void DabStreamProcessor::setAacOutput(int mode) {
     aac_output_ = (mode == 2 && !AacTranscoder::available()) ? 0 : mode;
 }
 
+void DabStreamProcessor::setWantedPids(const uint16_t* pids, int count) {
+    wanted_all_ = count < 0;
+    wanted_pids_.clear();
+    for (int i = 0; i < count; i++) wanted_pids_.insert(pids[i]);
+    if (aac_output_ != 2) return;
+    for (const auto& svc : services_) {
+        if (!svc.dabplus || dabplus_decoders_.count(svc.subchannel_id) == 0) continue;
+        bool want = isWanted(svc);
+        bool has = transcoders_.count(svc.subchannel_id) != 0;
+        if (want && !has) {
+            makeTranscoder(svc);
+        } else if (!want && has) {
+            transcoders_.erase(svc.subchannel_id);
+            LOG_DEBUG(DABPLUS, "transcoder of service 0x" << std::hex << svc.sid << std::dec
+                      << " stopped: its PIDs are not wanted");
+        }
+    }
+}
+
+bool DabStreamProcessor::isWanted(const TsService& svc) const {
+    return wanted_all_ || wanted_pids_.count(svc.pmt_pid) != 0 || wanted_pids_.count(svc.audio_pid) != 0;
+}
+
+// a transcoder for a DAB+ service: its output goes to the muxer
+void DabStreamProcessor::makeTranscoder(const TsService& svc) {
+    uint8_t subchannel_id = svc.subchannel_id;
+    transcoders_[subchannel_id] = std::make_unique<AacTranscoder>(svc.bitrate,
+        [this, subchannel_id](const uint8_t* data, size_t len, int64_t pts) {
+            auto it = subch_to_sid_.find(subchannel_id);
+            if (it != subch_to_sid_.end()) {
+                muxer_.feedAudioFrame(it->second, data, len, pts);
+            }
+        });
+}
+
 void DabStreamProcessor::addService(const TsService& service) {
     TsService svc = service;
     svc.latm = aac_output_ == 1 && svc.dabplus;
@@ -87,25 +123,22 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
 
             decoder->setLatm(aac_output_ == 1);
             DabPlusDecoder* dec = decoder.get();
-            AacTranscoder* tc = nullptr;
-            if (aac_output_ == 2) {
-                auto t = std::make_unique<AacTranscoder>(svc->bitrate,
-                    [this, subchannel_id](const uint8_t* data, size_t len, int64_t pts) {
-                        auto it = subch_to_sid_.find(subchannel_id);
-                        if (it != subch_to_sid_.end()) {
-                            muxer_.feedAudioFrame(it->second, data, len, pts);
-                        }
-                    });
-                tc = t.get();
-                transcoders_[subchannel_id] = std::move(t);
-            }
-            decoder->setTimedCallback([this, subchannel_id, dec, tc](const uint8_t* data, size_t len, int64_t au_slot) {
+            if (aac_output_ == 2 && isWanted(*svc)) makeTranscoder(*svc);
+            decoder->setTimedCallback([this, subchannel_id, dec](const uint8_t* data, size_t len, int64_t au_slot) {
                 audio_frame_count_++;
                 if (len < 7) return;
 
-                // decoded and encoded again: its output goes to the muxer
-                if (tc) {
-                    tc->feed(data, len, au_slot, dec->getParams());
+                // decoded and encoded again while the service is wanted
+                // (its output goes to the muxer); else not put out, but the
+                // tables go on with its time line (the real one, that of
+                // the transcoders)
+                if (aac_output_ == 2) {
+                    auto t = transcoders_.find(subchannel_id);
+                    if (t != transcoders_.end()) {
+                        t->second->feed(data, len, au_slot, dec->getParams());
+                    } else {
+                        muxer_.tick(90000 + au_slot * dec->getRealAuDuration90k());
+                    }
                     return;
                 }
 

@@ -840,6 +840,27 @@ void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int6
     auto it = sid_to_index_.find(sid);
     if (it == sid_to_index_.end() || len == 0) return;
 
+    tick(pts);
+
+    // Buffer audio frames for PES aggregation (reduces overhead like FFmpeg)
+    auto& buf = audio_buffers_[sid];
+
+    // Store first PTS for this buffer
+    if (buf.data.empty()) {
+        buf.first_pts = pts;
+    }
+
+    // Append frame to buffer
+    buf.data.insert(buf.data.end(), data, data + len);
+    buf.frame_count++;
+
+    // Flush when buffer reaches target size
+    if (buf.data.size() >= PES_TARGET_SIZE) {
+        flushAudioBuffer(sid);
+    }
+}
+
+void TsMuxer::tick(int64_t pts) {
     // Time-based PSI output (DVB compliant: PAT/PMT every 500ms, SDT every 2s)
     // Track maximum PTS seen to handle multi-service streams where each service has different PTS
     if (pts > last_psi_pts_) {
@@ -863,23 +884,6 @@ void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int6
     if (++frames_since_eit_ >= eit_carousel_interval_) {
         frames_since_eit_ = 0;
         outputEitScheduleCarousel();
-    }
-
-    // Buffer audio frames for PES aggregation (reduces overhead like FFmpeg)
-    auto& buf = audio_buffers_[sid];
-
-    // Store first PTS for this buffer
-    if (buf.data.empty()) {
-        buf.first_pts = pts;
-    }
-
-    // Append frame to buffer
-    buf.data.insert(buf.data.end(), data, data + len);
-    buf.frame_count++;
-
-    // Flush when buffer reaches target size
-    if (buf.data.size() >= PES_TARGET_SIZE) {
-        flushAudioBuffer(sid);
     }
 }
 

@@ -307,6 +307,11 @@ struct dvbdab_streamer {
     bool complete;
     bool auto_start_all;  // Auto-start all services when ensemble ready
 
+    // The output PIDs the user takes (dvbdab_streamer_set_wanted_pids), for
+    // a processor made after it: all, or these
+    bool wanted_all{true};
+    std::vector<uint16_t> wanted_pids;
+
     // Debug counters (per-streamer)
     int ts_output_count{0};
     size_t ts_output_bytes{0};
@@ -572,6 +577,9 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
         try {
             streamer->processor = std::make_unique<DabStreamProcessor>();
             streamer->processor->setAacOutput(streamer->config.aac_output);
+            if (!streamer->wanted_all)
+                streamer->processor->setWantedPids(streamer->wanted_pids.data(),
+                                                   static_cast<int>(streamer->wanted_pids.size()));
             streamer->processor->setOutput([streamer](const uint8_t* data, size_t len) {
                 streamer->ts_output_count++;
                 streamer->ts_output_bytes += len;
@@ -831,6 +839,22 @@ int dvbdab_streamer_stop_service(dvbdab_streamer_t *streamer, uint8_t subchannel
     if (!streamer || !streamer->processor) return -1;
     try {
         streamer->processor->stopService(subchannel_id);
+    } catch (...) {
+        return -1;
+    }
+    return 0;
+}
+
+int dvbdab_streamer_set_wanted_pids(dvbdab_streamer_t *streamer,
+                                    const uint16_t *pids, int count)
+{
+    if (!streamer || (count > 0 && !pids)) return -1;
+    try {
+        streamer->wanted_all = count < 0;
+        streamer->wanted_pids.assign(pids, pids + (count > 0 ? count : 0));
+        if (streamer->processor)
+            streamer->processor->setWantedPids(streamer->wanted_pids.data(),
+                                               streamer->wanted_all ? -1 : static_cast<int>(streamer->wanted_pids.size()));
     } catch (...) {
         return -1;
     }
