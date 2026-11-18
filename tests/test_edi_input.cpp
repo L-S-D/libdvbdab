@@ -31,11 +31,16 @@ void* operator new(std::size_t n) {
     return p;
 }
 // (GCC sees the free() of what its own operator new gave and warns: this pair is the match)
+#if defined(__GNUC__) && !defined(__clang__) && __GNUC__ >= 11
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#define DVBDAB_TEST_DIAGNOSTIC_POP
+#endif
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#ifdef DVBDAB_TEST_DIAGNOSTIC_POP
 #pragma GCC diagnostic pop
+#endif
 
 using Bytes = std::vector<uint8_t>;
 
