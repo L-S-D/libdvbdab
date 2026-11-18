@@ -3,14 +3,12 @@
 
 #include "spi_parser.hpp"
 #include "packet_decoder.hpp"
+#include "../logging.h"
 #include <pugixml.hpp>
 #include <cstring>
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
-
-// Debug output
-// #define SPI_DEBUG
 
 namespace dvbdab {
 
@@ -41,38 +39,27 @@ void SpiParser::onMotObject(uint16_t /*transport_id*/, const MOTHeaderInfo& head
     // Check for gzip-compressed XML (1f 8b magic)
     // Note: Would need zlib decompression - skip for now
     if (!is_xml && len > 2 && data[0] == 0x1f && data[1] == 0x8b) {
-#ifdef SPI_DEBUG
-        fprintf(stderr, "[SPI] Skipping gzip-compressed XML: %s\n", header.content_name.c_str());
-#endif
+        LOG_DEBUG(SPI, "skipping gzip-compressed XML: " << header.content_name);
         return;
     }
 
     if (!is_xml) {
-#ifdef SPI_DEBUG
-        fprintf(stderr, "[SPI] Ignoring non-XML MOT object: %s (type=%d)\n",
-                header.content_name.c_str(), header.content_type);
-#endif
+        LOG_DEBUG(SPI, "ignoring non-XML MOT object: " << header.content_name << " (type " << static_cast<int>(header.content_type) << ")");
         return;
     }
 
-#ifdef SPI_DEBUG
-    fprintf(stderr, "[SPI] Processing XML: %s (%zu bytes)\n",
-            header.content_name.c_str(), len);
-#endif
+    LOG_DEBUG(SPI, "XML: " << header.content_name << " (" << len << " bytes)");
 
     xml_count_++;
     parseSpiXml(data, len, header.content_name);
 }
 
-bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& /*filename*/) {
+bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& filename) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_buffer(data, len);
 
     if (!result) {
-#ifdef SPI_DEBUG
-        fprintf(stderr, "[SPI] XML parse error: %s at offset %zu\n",
-                result.description(), result.offset);
-#endif
+        LOG_DEBUG(SPI, "XML parse error: " << result.description() << " at offset " << result.offset);
         parse_errors_++;
         return false;
     }
@@ -85,9 +72,7 @@ bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& 
     pugi::xml_node root = doc.first_child();
     std::string root_name = root.name();
 
-#ifdef SPI_DEBUG
-    fprintf(stderr, "[SPI] Root element: %s\n", root_name.c_str());
-#endif
+    LOG_TRACE(SPI, "root element: " << root_name);
 
     // Handle <epg> element (main EPG container)
     if (root_name == "epg") {
@@ -105,9 +90,7 @@ bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& 
             uint32_t service_id = parseServiceId(sid_str);
 
             if (service_id == 0) {
-#ifdef SPI_DEBUG
-                fprintf(stderr, "[SPI] Could not parse service ID from: %s\n", sid_str.c_str());
-#endif
+                LOG_DEBUG(SPI, "no service ID in: " << sid_str);
                 continue;
             }
 
@@ -154,10 +137,7 @@ bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& 
         }
     }
 
-#ifdef SPI_DEBUG
-    fprintf(stderr, "[SPI] Unhandled root element: %s in %s\n",
-            root_name.c_str(), filename.c_str());
-#endif
+    LOG_DEBUG(SPI, "unhandled root element: " << root_name << " in " << filename);
     return false;
 }
 
@@ -178,9 +158,7 @@ bool SpiParser::parseSchedule(const void* schedule_node_ptr, uint32_t service_id
     }
 
     if (schedule.programmes.empty()) {
-#ifdef SPI_DEBUG
-        fprintf(stderr, "[SPI] No programmes found for service 0x%08x\n", service_id);
-#endif
+        LOG_DEBUG(SPI, "no programmes for service 0x" << std::hex << service_id);
         return false;
     }
 
@@ -190,15 +168,7 @@ bool SpiParser::parseSchedule(const void* schedule_node_ptr, uint32_t service_id
                   return a.start_time < b.start_time;
               });
 
-#ifdef SPI_DEBUG
-    fprintf(stderr, "[SPI] Parsed %zu programmes for service 0x%08x\n",
-            schedule.programmes.size(), service_id);
-    for (const auto& p : schedule.programmes) {
-        fprintf(stderr, "[SPI]   %s - %s\n",
-                p.name.c_str(),
-                ctime(&p.start_time));
-    }
-#endif
+    LOG_DEBUG(SPI, schedule.programmes.size() << " programmes for service 0x" << std::hex << service_id);
 
     // Store in cache
     schedules_[service_id] = schedule;
