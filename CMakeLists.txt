@@ -81,6 +81,7 @@ add_library(dvbdab STATIC
     src/output/charsets.cpp
     src/output/rds_uecp.cpp
     src/output/ts_muxer.cpp
+    src/output/ts_tables.cpp
     src/output/dab_stream_processor.cpp
     src/output/aac_transcoder.cpp
     src/ts_scanner.cpp
@@ -181,6 +182,7 @@ add_executable(test_etina_sync
 add_executable(test_stream_processor
     tests/test_stream_processor.cpp
     src/output/ts_muxer.cpp
+    src/output/ts_tables.cpp
     src/output/dab_stream_processor.cpp
     src/output/aac_transcoder.cpp
     src/output/dabplus_decoder.cpp
@@ -421,6 +423,7 @@ install(FILES
 
 install(FILES
     src/output/ts_muxer.hpp
+    src/output/ts_tables.hpp
     src/output/dab_stream_processor.hpp
     src/output/dabplus_decoder.hpp
     src/output/aac_transcoder.hpp

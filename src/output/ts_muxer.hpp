@@ -23,25 +23,9 @@
 #include <map>
 #include <functional>
 #include <ctime>
-#include "../parsers/spi_parser.hpp"  // For EpgSchedule/EpgProgramme
+#include "ts_tables.hpp"
 
 namespace dvbdab {
-
-/// @name TS Constants (ISO/IEC 13818-1)
-/// @{
-inline constexpr size_t TS_MUXER_PACKET_SIZE = 188;  ///< TS packet size in bytes
-inline constexpr uint16_t PID_PAT = 0x0000;          ///< PAT always on PID 0
-inline constexpr uint16_t PID_SDT = 0x0011;          ///< SDT/BAT PID
-inline constexpr uint16_t PID_EIT = 0x0012;          ///< EIT PID
-inline constexpr uint16_t PID_NULL = 0x1FFF;         ///< Null packet PID
-/// @}
-
-/// @name Stream Types (ISO/IEC 13818-1 Table 2-36)
-/// @{
-inline constexpr uint8_t STREAM_TYPE_AAC_ADTS = 0x0F;   ///< DAB+ (ISO/IEC 13818-7 AAC ADTS)
-inline constexpr uint8_t STREAM_TYPE_AAC_LATM = 0x11;   ///< DAB+ (ISO/IEC 14496-3 LATM in LOAS)
-inline constexpr uint8_t STREAM_TYPE_MPEG_AUDIO = 0x04; ///< DAB (ISO/IEC 13818-3 MPEG-2 Layer II)
-/// @}
 
 /**
  * @brief Callback for TS packet output
@@ -49,26 +33,6 @@ inline constexpr uint8_t STREAM_TYPE_MPEG_AUDIO = 0x04; ///< DAB (ISO/IEC 13818-
  * @param len  Total length in bytes (multiple of 188)
  */
 using TsCallback = std::function<void(const uint8_t* data, size_t len)>;
-
-/**
- * @brief Service configuration for TS muxing
- *
- * Defines a single program/service within the transport stream.
- * Each service has its own PMT, audio PID, and metadata.
- */
-struct TsService {
-    uint16_t sid;           ///< Service ID (program_number in PAT/PMT)
-    uint16_t pmt_pid;       ///< PID for this service's PMT
-    uint16_t audio_pid;     ///< PID for audio elementary stream
-    uint16_t rds_pid{0};    ///< PID for its dynamic label as RDS RadioText (UECP), 0 = none
-    std::string name;       ///< Service name (SDT service_name descriptor)
-    std::string provider;   ///< Provider name (SDT service_provider descriptor)
-    bool dabplus;           ///< true=DAB+ (AAC-LC), false=DAB (MPEG Layer II)
-    bool latm{false};       ///< DAB+ as LATM/LOAS (else ADTS)
-    uint8_t subchannel_id;  ///< DAB subchannel ID (for feedAudioFrame lookup)
-    int sample_rate{48000}; ///< Audio sample rate in Hz
-    int bitrate{0};         ///< Audio bitrate in kbps
-};
 
 /**
  * @brief FFmpeg-free MPEG-TS muxer for DAB audio streaming
@@ -216,9 +180,6 @@ private:
 
     // EIT schedule (0x50+) methods
     void outputEitScheduleCarousel();  // Output complete EIT table for all services
-    std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint8_t table_id,
-        uint8_t section_number, uint8_t last_section_number, uint8_t segment_last_section,
-        const std::vector<const EpgProgramme*>& events, size_t event_base);
 
     // Output a section as TS packets
     // set_discontinuity: set discontinuity_indicator on first packet (for EIT version changes)
@@ -233,9 +194,6 @@ private:
 
     // Write single TS packet
     void writePacket(const uint8_t* packet);
-
-    // CRC32 for PSI sections
-    static uint32_t dvbCrc32(const uint8_t* data, size_t len);
 
     // Callbacks and state
     TsCallback output_;
