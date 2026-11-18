@@ -78,7 +78,6 @@ private:
     // Check if bytes form valid MP2 sync
     static bool isSync(const uint8_t* data);
 
-    int bitrate_;
     size_t frame_size_;           // Expected subchannel frame size
     bool synced_ = false;
     size_t sync_offset_ = 0;      // Offset within accumulated data to next frame

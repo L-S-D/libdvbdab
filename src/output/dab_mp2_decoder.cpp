@@ -62,8 +62,7 @@ static const int samples_per_frame[4][4] = {
 };
 
 DabMp2Decoder::DabMp2Decoder(int bitrate)
-    : bitrate_(bitrate)
-    , frame_size_(bitrate * 3)  // bitrate * 24ms / 8 = bitrate * 3 bytes
+    : frame_size_(bitrate * 3)  // bitrate * 24ms / 8 = bitrate * 3 bytes
     , pad_(std::make_unique<PadDecoder>())
 {
     buffer_.reserve(frame_size_ * 2);  // Reserve space for buffering
