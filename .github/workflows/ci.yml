@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: ${{ matrix.cxx }}, transcoding ${{ matrix.transcode }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cc: gcc, cxx: g++, transcode: "ON" }
+          - { cc: clang, cxx: clang++, transcode: "ON" }
+          - { cc: gcc, cxx: g++, transcode: "OFF" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake pkg-config zlib1g-dev libpugixml-dev \
+            libfaad-dev libavcodec-dev libavutil-dev
+      # everything with -Wall -Wextra as errors, under ASan and UBSan
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+            -DDVBDAB_SANITIZE=ON -DDVBDAB_TRANSCODE=${{ matrix.transcode }} \
+            -DCMAKE_C_FLAGS=-Werror -DCMAKE_CXX_FLAGS=-Werror
+          cmake --build build -j"$(nproc)"
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure --timeout 600
+
+  fuzz:
+    name: libFuzzer, 60 s per harness
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake pkg-config clang zlib1g-dev libpugixml-dev
+      - name: Build
+        run: |
+          cmake -S . -B fuzz-build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DDVBDAB_FUZZ=ON -DDVBDAB_SANITIZE=ON -DDVBDAB_TRANSCODE=OFF
+          cmake --build fuzz-build -j"$(nproc)" --target fuzz_edi_stream fuzz_eti_frames fuzz_pad fuzz_mot_epg fuzz_ts_inputs
+      - name: Fuzz
+        run: |
+          for h in edi_stream:20000 eti_frames:20000 pad:2048 mot_epg:4096 ts_inputs:8192; do
+            n=${h%%:*}
+            mkdir -p corpus/$n
+            fuzz-build/fuzz_$n -max_total_time=60 -max_len=${h##*:} -rss_limit_mb=2048 -malloc_limit_mb=64 \
+              -timeout=10 corpus/$n fuzz/seeds/$n
+          done
+      - name: Keep what a fuzzer found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings
+          path: |
+            crash-*
+            oom-*
+            timeout-*
+            leak-*
