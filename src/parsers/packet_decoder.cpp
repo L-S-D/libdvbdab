@@ -80,7 +80,7 @@ void PacketDecoder::feedSubchannelData(const uint8_t* data, size_t len) {
         uint16_t calc_crc = crc16(buf, pkt_len - 2);
         uint16_t recv_crc = (buf[pkt_len - 2] << 8) | buf[pkt_len - 1];
 
-        if (calc_crc != recv_crc) {
+        if (CHECKSUMS_CHECKED && calc_crc != recv_crc) {
             crc_errors_++;
             pos++;
             continue;
@@ -555,7 +555,7 @@ void PacketDecoder::processDataGroup(uint16_t address, const uint8_t* data, size
         uint16_t calc_crc = crc16(data, len - 2);
         uint16_t recv_crc = (data[len - 2] << 8) | data[len - 1];
 
-        if (calc_crc != recv_crc) {
+        if (CHECKSUMS_CHECKED && calc_crc != recv_crc) {
             crc_errors_++;
             return;
         }

@@ -4,6 +4,7 @@
 #include "pad_decoder.hpp"
 #include "charsets.hpp"
 #include "../logging.h"
+#include "../utils/crc_utils.hpp"
 
 #include <algorithm>
 
@@ -177,7 +178,7 @@ void PadDecoder::subfield(uint8_t app_type, const uint8_t* data, size_t len) {
     if (!dg_need_ || dg_.size() < dg_need_) return;
     dg_active_ = false;  // done; what follows in the subfield is padding
     uint16_t crc = static_cast<uint16_t>(dg_[dg_need_ - 2] << 8 | dg_[dg_need_ - 1]);
-    if (crc16(dg_.data(), dg_need_ - 2) != crc) {
+    if (CHECKSUMS_CHECKED && crc16(dg_.data(), dg_need_ - 2) != crc) {
         crc_errors_++;
         return;
     }

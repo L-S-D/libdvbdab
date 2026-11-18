@@ -297,7 +297,7 @@ static bool fib_crc_ok(const uint8_t* fib, bool debug = false) {
         LOG_DEBUG(FIC, "FIB CRC: calc=0x" << std::hex << crc << " stored=0x" << stored_crc
                  << " ok=" << (crc == stored_crc) << std::dec);
     }
-    return crc == stored_crc;
+    return !CHECKSUMS_CHECKED || crc == stored_crc;
 }
 
 void DABParser::process_fib(const uint8_t* fib) {

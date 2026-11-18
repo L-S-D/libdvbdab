@@ -15,6 +15,15 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# -DDVBDAB_FUZZ=ON: a fuzzing build - every checksum counts as right (see
+# CHECKSUMS_CHECKED in src/utils/crc_utils.hpp), the harnesses in fuzz/ are
+# linked with libFuzzer when the compiler is clang. Never for a library to
+# install. See fuzz/README.md.
+option(DVBDAB_FUZZ "Fuzzing build: checksums count as right" OFF)
+if(DVBDAB_FUZZ)
+    add_compile_definitions(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+endif()
+
 # -DDVBDAB_SANITIZE=ON: library, tools and tests with AddressSanitizer and
 # UBSan (for the tests and the fuzz harnesses; not for a library to install)
 option(DVBDAB_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
@@ -277,9 +286,33 @@ add_executable(edi_extract
 )
 
 # ----------------------------------------------------------------------------
-# Tests that check themselves, without a capture: `ctest` runs them
+# Fuzz harnesses (fuzz/README.md). With clang and -DDVBDAB_FUZZ=ON they are
+# libFuzzer programs; else they get a main() that runs files and simple
+# mutations of them, and ctest runs each over its seeds that way.
 # ----------------------------------------------------------------------------
 enable_testing()
+
+set(DVBDAB_LIBFUZZER OFF)
+if(DVBDAB_FUZZ AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set(DVBDAB_LIBFUZZER ON)
+endif()
+foreach(f edi_stream eti_frames pad mot_epg ts_inputs)
+    if(DVBDAB_LIBFUZZER)
+        add_executable(fuzz_${f} fuzz/fuzz_${f}.cpp)
+        target_compile_options(fuzz_${f} PRIVATE -fsanitize=fuzzer)
+        target_link_options(fuzz_${f} PRIVATE -fsanitize=fuzzer)
+    else()
+        add_executable(fuzz_${f} fuzz/fuzz_${f}.cpp fuzz/standalone.cpp)
+        add_test(NAME fuzz_${f} COMMAND fuzz_${f} -runs=3000 -seed=1 ${CMAKE_CURRENT_SOURCE_DIR}/fuzz/seeds/${f})
+    endif()
+    target_link_libraries(fuzz_${f} dvbdab)
+endforeach()
+
+# ----------------------------------------------------------------------------
+# Tests that check themselves, without a capture: `ctest` runs them (not in
+# a fuzzing build: they test that a wrong checksum is refused)
+# ----------------------------------------------------------------------------
+if(NOT DVBDAB_FUZZ)
 
 foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits)
     add_executable(${t} tests/${t}.cpp)
@@ -294,6 +327,7 @@ add_test(NAME test_etina_sync COMMAND test_etina_sync)
 set(DVBDAB_TEST_CAPTURE "" CACHE FILEPATH "MPE capture for test_ipv4_input")
 add_test(NAME test_ipv4_input COMMAND test_ipv4_input ${DVBDAB_TEST_CAPTURE})
 set_tests_properties(test_ipv4_input PROPERTIES SKIP_RETURN_CODE 77)
+endif() # NOT DVBDAB_FUZZ
 
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
 

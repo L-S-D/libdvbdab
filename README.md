@@ -188,6 +188,21 @@ dvbdab_set_log_callback(my_log_handler, NULL);
 dvbdab_set_log_level(DVBDAB_LOG_DEBUG);
 ```
 
+## Tests
+
+```bash
+cmake -S . -B build -DDVBDAB_SANITIZE=ON   # ASan and UBSan; leave it out for a plain build
+make -C build
+(cd build && ctest)
+```
+
+`ctest` runs the tests that check themselves with synthetic input - the EDI
+input with damaged and crafted packets, the DAB+ decoder, dynamic labels and
+RDS, the TS that goes out (through a small TS checker), the limits of the
+packet mode decoder - and each fuzz harness over its seeds. Fuzzing itself:
+[fuzz/README.md](fuzz/README.md). The other programs in `tests/` print what
+they find in a capture; captures are not in the repository.
+
 ## Standalone Tools
 
 The tools and tests read MPE captures (`tests/support/mpe_ip_source.hpp`

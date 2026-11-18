@@ -75,7 +75,8 @@ bool PF_Reassembler::parse_pf_header(const uint8_t* pkt, size_t len, PF_Header& 
 
     // HCRC over the header before it: a header that is damaged (or bytes that
     // only start like one) must not set the fragment count
-    if (crc16_ccitt_xor(pkt, idx) != static_cast<uint16_t>((pkt[idx] << 8) | pkt[idx + 1])) {
+    if (CHECKSUMS_CHECKED &&
+        crc16_ccitt_xor(pkt, idx) != static_cast<uint16_t>((pkt[idx] << 8) | pkt[idx + 1])) {
         return false;
     }
     idx += 2;

@@ -141,6 +141,15 @@ inline const uint16_t firecode_table[256] = {
     0x3705, 0x4f2a, 0xc75b, 0xbf74, 0xaf96, 0xd7b9, 0x5fc8, 0x27e7
 };
 
+// A fuzzing build (-DDVBDAB_FUZZ=ON defines the macro) takes every checksum
+// as right: a fuzzer does not get behind one by chance, and what is behind
+// them must hold for any bytes. Never in a library that is installed.
+#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
+constexpr bool CHECKSUMS_CHECKED = false;
+#else
+constexpr bool CHECKSUMS_CHECKED = true;
+#endif
+
 // FireCode CRC check - returns true if bytes 0-1 match CRC of bytes 2-10
 // Used for DAB+ superframe synchronization
 inline bool firecode_check(const uint8_t* buf) {
@@ -149,7 +158,7 @@ inline bool firecode_check(const uint8_t* buf) {
     for (int i = 0; i < 9; i++) {
         crc = (crc << 8) ^ firecode_table[((crc >> 8) ^ ptr[i]) & 0xFF];
     }
-    return ((crc >> 8) == buf[0]) && ((crc & 0xFF) == buf[1]);
+    return !CHECKSUMS_CHECKED || (((crc >> 8) == buf[0]) && ((crc & 0xFF) == buf[1]));
 }
 
 // CRC-16 CCITT verification - returns true if CRC over data (including CRC bytes) is 0
@@ -159,7 +168,7 @@ inline bool crc16_ccitt_verify(const uint8_t* data, size_t len) {
     for (size_t i = 0; i < len; i++) {
         crc = (crc << 8) ^ crc16_ccitt_table[((crc >> 8) ^ data[i]) & 0xFF];
     }
-    return crc == 0;
+    return !CHECKSUMS_CHECKED || crc == 0;
 }
 
 } // namespace dvbdab

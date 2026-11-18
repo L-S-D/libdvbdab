@@ -191,7 +191,7 @@ int DABStreamParser::handle_af_packet(const uint8_t* pkt, size_t len) {
     if (has_crc) {
         uint16_t crc_from_pkt = read_be16(pkt + total_len - 2);
         uint16_t crc = crc16_ccitt_xor(pkt, total_len - 2);
-        if (crc_from_pkt != crc) {
+        if (CHECKSUMS_CHECKED && crc_from_pkt != crc) {
             LOG_DEBUG(STREAM, "AF CRC fail (got=0x" << std::hex << crc_from_pkt
                      << " calc=0x" << crc << std::dec << ")");
             return -1;
