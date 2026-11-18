@@ -38,6 +38,13 @@ public:
     // Set callback for decoded MP2 frames
     void setCallback(Mp2FrameCallback cb) { callback_ = std::move(cb); }
 
+    // The same with the time the frame began at, in 1/90000 s from frame
+    // number 0 of feedFrame(data, len, frame_no): frames of the subchannel
+    // last 24 ms, an MPEG frame begins where its bytes are in them (lost
+    // frames leave a gap; a frame of 48 ms starts in every second one)
+    using TimedCallback = std::function<void(const uint8_t* data, size_t len, int64_t time90k)>;
+    void setTimedCallback(TimedCallback cb) { timed_callback_ = std::move(cb); }
+
     // The dynamic label and its DL Plus tags from the PAD at the end of each frame
     void setDLSCallback(std::function<void(const std::string& text)> cb);
     void setDLPlusCallback(std::function<void(const std::string& text, const std::vector<DLPlusTag>& tags)> cb);
@@ -45,6 +52,8 @@ public:
     // Feed subchannel frame data (24ms worth)
     // Returns number of MP2 frames extracted
     int feedFrame(const uint8_t* data, size_t len);
+    // with the number of the frame (24 ms each; lost frames: resync() first)
+    int feedFrame(const uint8_t* data, size_t len, int64_t frame_no);
 
     // Reset decoder state
     void reset();
@@ -79,6 +88,15 @@ private:
 
     Mp2Params params_{};
     Mp2FrameCallback callback_;
+    TimedCallback timed_callback_;
+
+    // where the first byte of buffer_ is in the stream: the frame it came
+    // in and its place in that frame (frames of feed_len_ bytes)
+    int64_t buf_frame_ = 0;
+    size_t buf_off_ = 0;
+    size_t feed_len_ = 0;
+    int64_t next_frame_ = 0;      // frame number for feedFrame() without one
+    void consumed(size_t bytes);
 
     // Statistics
     size_t frame_count_ = 0;

@@ -107,7 +107,7 @@ private:
     std::map<uint8_t, std::unique_ptr<PacketDecoder>> epg_decoders_;
     static constexpr size_t MAX_DATA_SUBCHANNELS = 8;
     std::set<uint8_t> data_subchannels_;
-    std::set<uint16_t> processed_tids_;
+    std::map<uint16_t, uint32_t> processed_files_;  // MOT transport id -> hash of the EHB file parsed
     EhbParser ehb_parser_;
 
     // Buffer for early EPG schedules (before muxer configured) - SAME as test_custom_muxer
@@ -116,7 +116,6 @@ private:
     // Service info
     std::vector<TsService> services_;
     std::map<uint8_t, uint16_t> subch_to_sid_;
-    std::map<uint16_t, int64_t> pts_counter_;
 
     // Frame numbers from the FCT of the ETI frames (24 ms each), the last
     // frame number each MP2 subchannel got

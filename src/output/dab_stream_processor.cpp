@@ -78,6 +78,7 @@ void DabStreamProcessor::setWantedPids(const uint16_t* pids, int count) {
             makeTranscoder(svc);
         } else if (!want && has) {
             transcoders_.erase(svc.subchannel_id);
+            muxer_.dropAudio(svc.sid);  // what waited for a PES is of then, not of the next start
             LOG_DEBUG(DABPLUS, "transcoder of service 0x" << std::hex << svc.sid << std::dec
                       << " stopped: its PIDs are not wanted");
         }
@@ -105,7 +106,6 @@ void DabStreamProcessor::addService(const TsService& service) {
     svc.latm = aac_output_ == 1 && svc.dabplus;
     services_.push_back(svc);
     subch_to_sid_[svc.subchannel_id] = svc.sid;
-    pts_counter_[svc.sid] = 90000;  // Start at 1 second
     muxer_.addService(svc);
 }
 
@@ -169,38 +169,17 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
         if (mp2_decoders_.find(subchannel_id) == mp2_decoders_.end()) {
             auto decoder = std::make_unique<DabMp2Decoder>(svc->bitrate);
 
-            decoder->setCallback([this, subchannel_id](const uint8_t* data, size_t len) {
+            decoder->setTimedCallback([this, subchannel_id](const uint8_t* data, size_t len, int64_t time90k) {
                 audio_frame_count_++;
                 if (len < 4) return;
 
                 auto it = subch_to_sid_.find(subchannel_id);
                 if (it == subch_to_sid_.end()) return;
 
-                // Parse sample rate from MP2 header
-                // Syncword(12) + ID(1) + Layer(2) + Protection(1) + Bitrate(4) + SampleRate(2) + ...
-                int sample_rate = 48000;  // Default fallback
-                if (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0) {
-                    int version = (data[1] >> 3) & 0x03;  // 0=MPEG2.5, 2=MPEG2, 3=MPEG1
-                    int sr_idx = (data[2] >> 2) & 0x03;
-                    static const int sr_table[4][4] = {
-                        {11025, 12000, 8000, 0},   // MPEG2.5
-                        {0, 0, 0, 0},              // Reserved
-                        {22050, 24000, 16000, 0},  // MPEG2
-                        {44100, 48000, 32000, 0}   // MPEG1
-                    };
-                    if (version != 1 && sr_idx < 3) {
-                        sample_rate = sr_table[version][sr_idx];
-                    }
-                }
-
-                // Safety check to prevent division by zero
-                if (sample_rate == 0) sample_rate = 48000;
-
-                int64_t pts = pts_counter_[it->second];
-                // 1152 samples per MP2 Layer II frame
-                pts_counter_[it->second] += (int64_t)1152 * 90000 / sample_rate;
-
-                muxer_.feedAudioFrame(it->second, data, len, pts);
+                // The time the frame began at on the time line of the
+                // subchannel (as the AU slots of DAB+): lost frames leave a
+                // gap, whatever the length of an MPEG frame
+                muxer_.feedAudioFrame(it->second, data, len, 90000 + time90k);
             });
 
             decoder->setDLSCallback([this, subchannel_id](const std::string& text) {
@@ -249,6 +228,9 @@ void DabStreamProcessor::stopService(uint8_t subchannel_id) {
     dabplus_decoders_.erase(subchannel_id);
     transcoders_.erase(subchannel_id);
     mp2_decoders_.erase(subchannel_id);
+    mp2_last_frame_.erase(subchannel_id);
+    auto it = subch_to_sid_.find(subchannel_id);
+    if (it != subch_to_sid_.end()) muxer_.dropAudio(it->second);
 }
 
 void DabStreamProcessor::startAllServices() {
@@ -337,18 +319,14 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
             }
             auto mp2_it = mp2_decoders_.find(scid);
             if (mp2_it != mp2_decoders_.end()) {
-                // Lost frames: their MP2 frames (one per 24 ms frame) are
-                // missing, the next one starts later by that much
+                // Lost frames: what is buffered of an MPEG frame goes; the
+                // time of the next one follows from the frame it begins in
                 auto last = mp2_last_frame_.find(scid);
                 if (last != mp2_last_frame_.end() && frame_no_ - last->second > 1) {
                     mp2_it->second->resync();
-                    auto sid = subch_to_sid_.find(scid);
-                    if (sid != subch_to_sid_.end()) {
-                        pts_counter_[sid->second] += (frame_no_ - last->second - 1) * 2160;
-                    }
                 }
                 mp2_last_frame_[scid] = frame_no_;
-                mp2_it->second->feedFrame(eti_ni + stream_offset, stream_size);
+                mp2_it->second->feedFrame(eti_ni + stream_offset, stream_size, frame_no_);
                 stream_offset += stream_size;
                 continue;
             }
@@ -372,7 +350,14 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
             decoder->setMotCallback([this](uint16_t tid,
                     const MOTHeaderInfo& hdr, const uint8_t* file_data, size_t file_len) {
                 if (hdr.content_name.find(".EHB") != std::string::npos) {
-                    if (processed_tids_.insert(tid).second) {
+                    // again only when it is another file: a transport id
+                    // comes again with new content (the counter wraps)
+                    uint32_t h = 2166136261u;
+                    for (unsigned char ch : hdr.content_name) h = (h ^ ch) * 16777619u;
+                    for (size_t i = 0; i < file_len; i++) h = (h ^ file_data[i]) * 16777619u;
+                    auto seen = processed_files_.find(tid);
+                    if (seen == processed_files_.end() || seen->second != h) {
+                        processed_files_[tid] = h;
                         ehb_parser_.parse(hdr.content_name, file_data, file_len);
                     }
                 }

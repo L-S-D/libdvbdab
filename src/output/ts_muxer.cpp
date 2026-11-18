@@ -42,7 +42,6 @@ void TsMuxer::addService(const TsService& service) {
     subch_to_sid_[service.subchannel_id] = service.sid;
     cc_[service.pmt_pid] = 0;
     cc_[service.audio_pid] = 0;
-    frames_since_pcr_[service.audio_pid] = 0;
 
     // The PAT and SDT that went out earlier do not list this service: a new
     // version makes receivers read them again
@@ -79,7 +78,11 @@ void TsMuxer::outputRadioTexts(int64_t pts) {
         if (rt.sent_pts >= 0 && pts - rt.sent_pts < RADIO_TEXT_REPEAT_PTS) continue;
         auto it = sid_to_index_.find(sid);
         if (it == sid_to_index_.end() || !services_[it->second].rds_pid) continue;
-        outputPes(services_[it->second].rds_pid, rt.frame.data(), rt.frame.size(), pts, false, 0, 0xBD);
+        // stamped with the time of its own audio (the services of an ensemble
+        // need not be on one time line); when to send goes by the tick
+        auto own = last_audio_pts_.find(sid);
+        outputPes(services_[it->second].rds_pid, rt.frame.data(), rt.frame.size(),
+                  own != last_audio_pts_.end() ? own->second : pts, false, 0, 0xBD);
         rt.sent_pts = pts;
     }
 }
@@ -260,87 +263,98 @@ void TsMuxer::outputPmt(const TsService& service) {
 }
 
 void TsMuxer::outputSdt() {
-    std::vector<uint8_t> section;
-    section.reserve(256);  // SDT: ~14 bytes header + variable per service + 4 bytes CRC
-
-    // table_id = 0x42 (SDT actual)
-    section.push_back(0x42);
-
-    size_t len_pos = section.size();
-    section.push_back(0x00);
-    section.push_back(0x00);
-
-    // transport_stream_id
-    section.push_back((tsid_ >> 8) & 0xFF);
-    section.push_back(tsid_ & 0xFF);
-
-    // reserved(2) + version_number(5) + current_next_indicator(1)
-    section.push_back(0xC1 | ((sdt_version_ & 0x1F) << 1));
-
-    // section_number
-    section.push_back(0x00);
-
-    // last_section_number
-    section.push_back(0x00);
-
-    // original_network_id
-    section.push_back((onid_ >> 8) & 0xFF);
-    section.push_back(onid_ & 0xFF);
-
-    // reserved_future_use
-    section.push_back(0xFF);
-
-    // Service entries
+    // The entry of each service
+    std::vector<std::vector<uint8_t>> entries;
     for (const auto& svc : services_) {
-        section.push_back((svc.sid >> 8) & 0xFF);
-        section.push_back(svc.sid & 0xFF);
+        std::vector<uint8_t> e;
+        e.push_back((svc.sid >> 8) & 0xFF);
+        e.push_back(svc.sid & 0xFF);
 
-        // reserved(6) + EIT_schedule_flag(1) + EIT_present_following_flag(1)
-        section.push_back(0xFF);  // Both EIT flags set
+        // reserved(6) + EIT_schedule_flag(1) + EIT_present_following_flag(1):
+        // there is a schedule, no present/following
+        e.push_back(0xFE);
 
         // running_status(3) + free_CA_mode(1) + descriptors_loop_length(12)
-        size_t desc_len_pos = section.size();
-        section.push_back(0x00);
-        section.push_back(0x00);
-        size_t desc_start = section.size();
+        size_t desc_len_pos = e.size();
+        e.push_back(0x00);
+        e.push_back(0x00);
+        size_t desc_start = e.size();
 
         // Service descriptor (0x48)
-        section.push_back(0x48);
-        size_t desc_size_pos = section.size();
-        section.push_back(0x00);
+        e.push_back(0x48);
+        size_t desc_size_pos = e.size();
+        e.push_back(0x00);
 
         // service_type = 0x02 (radio)
-        section.push_back(0x02);
+        e.push_back(0x02);
 
         // provider_name
         std::string provider = svc.provider.empty() ? provider_name_ : svc.provider;
-        appendDvbString(section, provider);
+        appendDvbString(e, provider);
 
         // service_name
-        appendDvbString(section, svc.name);
+        appendDvbString(e, svc.name);
 
         // Fill descriptor length
-        section[desc_size_pos] = static_cast<uint8_t>(section.size() - desc_size_pos - 1);
+        e[desc_size_pos] = static_cast<uint8_t>(e.size() - desc_size_pos - 1);
 
         // Fill descriptors_loop_length with running_status=4 (running)
-        size_t desc_len = section.size() - desc_start;
-        section[desc_len_pos] = 0x80 | ((desc_len >> 8) & 0x0F);  // running=4, free_CA=0
-        section[desc_len_pos + 1] = desc_len & 0xFF;
+        size_t desc_len = e.size() - desc_start;
+        e[desc_len_pos] = 0x80 | ((desc_len >> 8) & 0x0F);  // running=4, free_CA=0
+        e[desc_len_pos + 1] = desc_len & 0xFF;
+        entries.push_back(std::move(e));
     }
 
-    // Section length
-    size_t section_length = section.size() - 3 + 4;
-    section[len_pos] = 0xF0 | ((section_length >> 8) & 0x0F);
-    section[len_pos + 1] = section_length & 0xFF;
+    // Into sections of 1024 bytes at most (11 bytes before the entries, the CRC after them)
+    constexpr size_t MAX_ENTRIES_BYTES = 1024 - 11 - 4;
+    std::vector<std::vector<uint8_t>> bodies(1);
+    for (const auto& e : entries) {
+        if (!bodies.back().empty() && bodies.back().size() + e.size() > MAX_ENTRIES_BYTES) {
+            bodies.emplace_back();
+        }
+        bodies.back().insert(bodies.back().end(), e.begin(), e.end());
+    }
 
-    // CRC32
-    uint32_t crc = dvbCrc32(section.data(), section.size());
-    section.push_back((crc >> 24) & 0xFF);
-    section.push_back((crc >> 16) & 0xFF);
-    section.push_back((crc >> 8) & 0xFF);
-    section.push_back(crc & 0xFF);
+    for (size_t n = 0; n < bodies.size(); n++) {
+        std::vector<uint8_t> section;
+        section.reserve(11 + bodies[n].size() + 4);
 
-    outputSection(PID_SDT, section);
+        // table_id = 0x42 (SDT actual)
+        section.push_back(0x42);
+
+        size_t section_length = 8 + bodies[n].size() + 4;
+        section.push_back(0xF0 | ((section_length >> 8) & 0x0F));
+        section.push_back(section_length & 0xFF);
+
+        // transport_stream_id
+        section.push_back((tsid_ >> 8) & 0xFF);
+        section.push_back(tsid_ & 0xFF);
+
+        // reserved(2) + version_number(5) + current_next_indicator(1)
+        section.push_back(0xC1 | ((sdt_version_ & 0x1F) << 1));
+
+        // section_number, last_section_number
+        section.push_back(static_cast<uint8_t>(n));
+        section.push_back(static_cast<uint8_t>(bodies.size() - 1));
+
+        // original_network_id
+        section.push_back((onid_ >> 8) & 0xFF);
+        section.push_back(onid_ & 0xFF);
+
+        // reserved_future_use
+        section.push_back(0xFF);
+
+        section.insert(section.end(), bodies[n].begin(), bodies[n].end());
+
+        // CRC32
+        uint32_t crc = dvbCrc32(section.data(), section.size());
+        section.push_back((crc >> 24) & 0xFF);
+        section.push_back((crc >> 16) & 0xFF);
+        section.push_back((crc >> 8) & 0xFF);
+        section.push_back(crc & 0xFF);
+
+        outputSection(PID_SDT, section);
+    }
 }
 
 // Helper to build one EIT p/f section
@@ -359,12 +373,20 @@ void TsMuxer::updateSchedule(uint16_t service_id, const EpgSchedule& schedule) {
     existing.service_name = schedule.service_name;
     existing.last_update = schedule.last_update;
 
-    // Add new programmes (avoid duplicates by start_time)
+    // Add new programmes; one with the start time of one that is there
+    // replaces it when it says something else (a corrected title or
+    // duration). A duration of 86400 is the "all day" placeholder that is
+    // cut to the next start below: not a change.
     for (const auto& prog : schedule.programmes) {
         bool found = false;
-        for (const auto& existing_prog : existing.programmes) {
+        for (auto& existing_prog : existing.programmes) {
             if (existing_prog.start_time == prog.start_time) {
                 found = true;
+                if (existing_prog.name != prog.name || existing_prog.description != prog.description ||
+                    (prog.duration_seconds != 86400 && existing_prog.duration_seconds != prog.duration_seconds)) {
+                    existing_prog = prog;
+                    schedule_changed_[service_id] = true;
+                }
                 break;
             }
         }
@@ -528,8 +550,11 @@ std::vector<uint8_t> TsMuxer::buildEitScheduleSection(uint16_t service_id, uint8
     for (size_t i = 0; i < events.size(); i++) {
         const EpgProgramme* prog = events[i];
 
-        // event_id - unique per event: high byte from SID, low byte sequential index
-        uint16_t event_id = (service_id & 0xFF00) | ((event_base + i) & 0xFF);
+        // event_id: from the start time, in minutes - the same for a
+        // programme whatever was put before it, and no two alike in the 45
+        // days it takes to come round
+        (void)event_base;
+        uint16_t event_id = static_cast<uint16_t>((prog->start_time / 60) & 0xFFFF);
         section.push_back((event_id >> 8) & 0xFF);
         section.push_back(event_id & 0xFF);
 
@@ -661,20 +686,10 @@ void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t p
             packet[4] = 7;  // adaptation_field_length
             packet[5] = 0x10;  // PCR_flag = 1
 
-            // PCR: 33-bit base (90kHz * 300 = 27MHz) + 6 reserved + 9-bit extension
-            // pcr is already in 27MHz (pts * 300)
-            int64_t pcr_base = (pcr / 300) & 0x1FFFFFFFFLL;  // Back to 90kHz for base
-            uint16_t pcr_ext = pcr % 300;  // Extension (0-299)
-
-            // Actually PCR format: base(33) + reserved(6) + extension(9) = 48 bits
-            // Let's use the full 27MHz value directly
-            int64_t pcr27 = pcr & 0x1FFFFFFFFLL;  // 33 bits for base at 27MHz...
-            // Wait, that's not right. Let me recalculate.
-            // PCR = base * 300 + extension, where base is 33 bits at 90kHz
-            // So: pcr_base (33 bits, 90kHz) = pcr / 300
-            //     pcr_ext (9 bits, 0-299) = pcr % 300
-            pcr_base = (pcr / 300) & 0x1FFFFFFFFLL;
-            pcr_ext = pcr % 300;
+            // PCR (in 27 MHz units): base (33 bits, 90 kHz) + 6 reserved +
+            // extension (9 bits, 0-299); pcr = base * 300 + extension
+            int64_t pcr_base = (pcr / 300) & 0x1FFFFFFFFLL;
+            uint16_t pcr_ext = static_cast<uint16_t>(pcr % 300);
 
             packet[6] = (pcr_base >> 25) & 0xFF;
             packet[7] = (pcr_base >> 17) & 0xFF;
@@ -730,32 +745,13 @@ void TsMuxer::flushAudioBuffer(uint16_t sid) {
 
     if (buf.data.empty()) return;
 
-    // Determine if we should insert PCR
-    // Use global PCR timeline to avoid jitter when switching between programs
-    bool insert_pcr = false;
-    int64_t pcr = buf.first_pts * 300;  // Convert 90kHz PTS to 27MHz PCR
+    // The PCR of a service is on its own time line (its PCR PID is its audio
+    // PID), ahead of the PTS by a fixed time: what a decoder that goes by
+    // the PCR has as buffer. Every PES has one.
+    int64_t pcr = (buf.first_pts > PCR_LEAD_PTS ? buf.first_pts - PCR_LEAD_PTS : 0) * 300;
 
-    // Update global PCR to track maximum across all services
-    if (pcr > global_pcr_) {
-        global_pcr_ = pcr;
-    }
-
-    // Use global PCR for output to ensure monotonic timeline
-    int64_t output_pcr = global_pcr_;
-
-    if (frames_since_pcr_[audio_pid] == 0) {
-        // First frame for this PID - insert PCR
-        insert_pcr = true;
-        frames_since_pcr_[audio_pid] = 1;
-    } else {
-        frames_since_pcr_[audio_pid] += buf.frame_count;
-        if (frames_since_pcr_[audio_pid] >= 3) {
-            insert_pcr = true;
-            frames_since_pcr_[audio_pid] = 0;
-        }
-    }
-
-    outputPes(audio_pid, buf.data.data(), buf.data.size(), buf.first_pts, insert_pcr, output_pcr);
+    outputPes(audio_pid, buf.data.data(), buf.data.size(), buf.first_pts, true, pcr);
+    last_audio_pts_[sid] = buf.last_pts;
 
     buf.data.clear();
     buf.frame_count = 0;
@@ -770,6 +766,20 @@ void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int6
     // Buffer audio frames for PES aggregation (reduces overhead like FFmpeg)
     auto& buf = audio_buffers_[sid];
 
+    // The time from one frame to the next: the smallest seen (lost frames
+    // only make it longer)
+    int64_t& step = frame_step_[sid];
+    if (buf.last_pts >= 0 && pts > buf.last_pts && (step == 0 || pts - buf.last_pts < step)) {
+        step = pts - buf.last_pts;
+    }
+
+    // A PES has the PTS of its first frame only, a receiver counts on from
+    // it: frames that do not follow each other (lost ones between them, a
+    // time line that starts anew) do not go into one PES
+    if (!buf.data.empty() && (pts <= buf.last_pts || (step > 0 && pts - buf.last_pts > step + step / 8))) {
+        flushAudioBuffer(sid);
+    }
+
     // Store first PTS for this buffer
     if (buf.data.empty()) {
         buf.first_pts = pts;
@@ -778,11 +788,22 @@ void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int6
     // Append frame to buffer
     buf.data.insert(buf.data.end(), data, data + len);
     buf.frame_count++;
+    buf.last_pts = pts;
 
-    // Flush when buffer reaches target size
-    if (buf.data.size() >= PES_TARGET_SIZE) {
+    // A PES goes out when it is long enough in bytes or in time: by bytes
+    // alone a service of 16 kbit/s got one a second, and with it its PCR
+    // and the first sound after tuning to it
+    if (buf.data.size() >= PES_TARGET_SIZE || pts + step - buf.first_pts >= PES_TARGET_PTS) {
         flushAudioBuffer(sid);
     }
+}
+
+void TsMuxer::dropAudio(uint16_t sid) {
+    auto it = audio_buffers_.find(sid);
+    if (it == audio_buffers_.end()) return;
+    it->second.data.clear();
+    it->second.frame_count = 0;
+    it->second.last_pts = -1;
 }
 
 void TsMuxer::tick(int64_t pts) {

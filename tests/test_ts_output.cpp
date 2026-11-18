@@ -32,6 +32,13 @@ struct Checker {
     std::map<uint16_t, size_t> max_section;           // per PID
     std::map<uint16_t, int64_t> last_pts;
     std::map<uint16_t, size_t> pes;
+    // per audio PID: PES without a PCR, the smallest PTS - PCR, the longest time between two PCRs
+    std::map<uint16_t, size_t> pes_without_pcr;
+    std::map<uint16_t, int64_t> last_pcr, min_lead, max_pcr_gap;
+    std::map<uint16_t, std::set<uint16_t>> event_ids;      // per service
+    std::map<uint16_t, std::set<std::string>> event_texts; // per service: the descriptors of its events
+    std::set<uint16_t> sdt_services;
+    size_t sdt_sections = 0;
     // EIT: per service the events seen (start time bytes), and how often its section 0 came
     std::map<uint16_t, std::set<std::vector<uint8_t>>> events;
     std::map<uint16_t, size_t> eit_passes;
@@ -50,7 +57,16 @@ struct Checker {
             for (size_t p = 14; p + 12 <= n - 4;) {
                 size_t dl = static_cast<size_t>((s[p + 10] & 0x0F) << 8 | s[p + 11]);
                 events[sid].insert(std::vector<uint8_t>(s + p + 2, s + p + 7));
+                event_ids[sid].insert(static_cast<uint16_t>(s[p] << 8 | s[p + 1]));
+                if (p + 12 + dl <= n - 4) event_texts[sid].insert(std::string(s + p + 12, s + p + 12 + dl));
                 p += 12 + dl;
+            }
+        }
+        if (pid == 0x11 && n >= 15 && s[0] == 0x42) {
+            if (s[6] == 0) sdt_sections = static_cast<size_t>(s[7]) + 1;
+            for (size_t p = 11; p + 5 <= n - 4;) {
+                sdt_services.insert(static_cast<uint16_t>(s[p] << 8 | s[p + 1]));
+                p += 5 + static_cast<size_t>((s[p + 3] & 0x0F) << 8 | s[p + 4]);
             }
         }
     }
@@ -79,7 +95,12 @@ struct Checker {
             bool pusi = (k[1] & 0x40) != 0;
             int afc = (k[3] >> 4) & 3;
             size_t pl = 4;
-            if (afc & 2) pl = 5 + k[4];
+            int64_t pcr = -1;
+            if (afc & 2) {
+                if (k[4] >= 7 && (k[5] & 0x10))
+                    pcr = (static_cast<int64_t>(k[6]) << 25) | (k[7] << 17) | (k[8] << 9) | (k[9] << 1) | (k[10] >> 7);
+                pl = 5 + k[4];
+            }
             if (!(afc & 1) || pl >= 188) continue;
             int c = k[3] & 0x0F;
             auto it = cc.find(pid);
@@ -108,6 +129,15 @@ struct Checker {
                 if (lp != last_pts.end() && pts < lp->second) pts_back++;
                 last_pts[pid] = pts;
                 pes[pid]++;
+                if (pid >= 0x1000 && pid < 0x1100) {
+                    if (pcr < 0) {
+                        pes_without_pcr[pid]++;
+                    } else {
+                        if (!min_lead.count(pid) || pts - pcr < min_lead[pid]) min_lead[pid] = pts - pcr;
+                        if (last_pcr.count(pid) && pcr - last_pcr[pid] > max_pcr_gap[pid]) max_pcr_gap[pid] = pcr - last_pcr[pid];
+                        last_pcr[pid] = pcr;
+                    }
+                }
             }
         }
     }
@@ -159,7 +189,9 @@ static void add_services(DabStreamProcessor& p, int n) {
 
 // `seconds` of DAB audio (MPEG-2 Layer II, 24 kHz, 64 kbit/s: a frame of 384
 // bytes over two ETI frames) for n services; every 51st ETI frame is lost
-static void run(DabStreamProcessor& p, int n, int seconds) {
+// (with_audio: the first so many services have audio, the others 24 bytes of
+// nothing - an ETI frame does not hold 60 times 192 bytes)
+static void run(DabStreamProcessor& p, int n, int seconds, bool losses = true, int with_audio = 64) {
     std::vector<uint8_t> mp2(384, 0x11);
     mp2[0] = 0xFF;
     mp2[1] = 0xF5;
@@ -169,8 +201,12 @@ static void run(DabStreamProcessor& p, int n, int seconds) {
     mp2[383] = 0;
     int frames = seconds * 1000 / 24;
     for (int i = 0; i < frames; i++) {
-        if (i > 100 && i % 51 == 0) continue;
-        std::vector<std::vector<uint8_t>> subs(n, std::vector<uint8_t>(mp2.begin() + (i % 2) * 192, mp2.begin() + (i % 2) * 192 + 192));
+        if (losses && i > 100 && i % 51 == 0) continue;
+        std::vector<std::vector<uint8_t>> subs;
+        for (int s = 0; s < n; s++) {
+            if (s < with_audio) subs.emplace_back(mp2.begin() + (i % 2) * 192, mp2.begin() + (i % 2) * 192 + 192);
+            else subs.emplace_back(24, 0x00);
+        }
         auto f = eti(i % 250, subs);
         p.feedEtiFrame(f.data(), f.size());
     }
@@ -213,6 +249,54 @@ int main() {
         check(c.events[0x1000].size() == 40, "the 40 programmes of a service are in the EIT");
         check(c.eit_passes[0x1000] >= 5 && c.eit_passes[0x1000] <= 8,
               "the EIT of a service goes out every 10 s, whatever the number of services");
+        check(c.event_ids[0x1000].size() == 40, "every programme has an event id of its own");
+        // 60 s of frames of 48 ms with 28 lost frames of 24 ms: the last PTS is where the time is
+        int64_t expect = 90000 + static_cast<int64_t>(60 * 1000 / 24) * 2160;
+        check(c.last_pts[0x1000] > expect - 2 * 9000 && c.last_pts[0x1000] <= expect,
+              "lost frames do not make the PTS of DAB audio fall behind");
+        check(c.pes_without_pcr[0x1000] == 0 && c.min_lead[0x1000] >= 27000,
+              "every audio PES has a PCR, at least 300 ms before its PTS");
+    }
+    {
+        // without losses: the PCR comes often enough
+        DabStreamProcessor p;
+        Checker c;
+        p.setOutput([&](const uint8_t* d, size_t len) { c.feed(d, len); });
+        add_services(p, 2);
+        run(p, 2, 20, false);
+        check(c.max_pcr_gap[0x1000] > 0 && c.max_pcr_gap[0x1000] <= 9000, "a PCR at least every 100 ms");
+    }
+    {
+        // more services than one SDT section holds
+        DabStreamProcessor p;
+        Checker c;
+        p.setOutput([&](const uint8_t* d, size_t len) { c.feed(d, len); });
+        add_services(p, 60);
+        run(p, 60, 5, true, 1);
+        std::printf("-- 60 services: SDT in %zu sections, largest %zu bytes\n", c.sdt_sections, c.max_section[0x11]);
+        check(c.sdt_sections >= 2 && c.max_section[0x11] <= 1024 && c.sdt_services.size() == 60,
+              "the SDT of 60 services is in several sections of 1024 bytes at most");
+        check(c.bad_crc == 0 && c.cc_errors == 0, "and the TS is in order");
+    }
+    {
+        // a programme with another title at the same start time replaces the old one
+        DabStreamProcessor p;
+        Checker c;
+        p.setOutput([&](const uint8_t* d, size_t len) { c.feed(d, len); });
+        add_services(p, 1);
+        p.getMuxer().updateSchedule(0x1000, schedule(0x1000, now, 5, 1800));
+        run(p, 1, 15);
+        EpgSchedule changed = schedule(0x1000, now, 5, 1800);
+        changed.programmes[2].name = "A corrected title";
+        p.getMuxer().updateSchedule(0x1000, changed);
+        c.event_texts.clear();
+        run(p, 1, 15);
+        bool has_new = false, has_old = false;
+        for (const auto& t : c.event_texts[0x1000]) {
+            if (t.find("A corrected title") != std::string::npos) has_new = true;
+            if (t.find("Programme 2") != std::string::npos) has_old = true;
+        }
+        check(has_new && !has_old && c.events[0x1000].size() == 5, "a corrected programme replaces the old one in the EIT");
     }
     {
         DabStreamProcessor p;

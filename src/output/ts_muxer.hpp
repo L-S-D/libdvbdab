@@ -138,6 +138,12 @@ public:
     void feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int64_t pts);
 
     /**
+     * @brief Drop the frames of a service that wait for their PES (its audio
+     *        stops: what comes when it starts again is of another time)
+     */
+    void dropAudio(uint16_t sid);
+
+    /**
      * @brief Feed audio frame by subchannel ID (legacy compatibility)
      * @param subchannel_id DAB subchannel ID
      * @param data Audio data
@@ -259,15 +265,18 @@ private:
     static constexpr int64_t RADIO_TEXT_REPEAT_PTS = 3 * 90000;  // again after 3 s
 
     // PCR tracking - use global timeline for multi-program sync
-    int64_t global_pcr_{-1};  // Global PCR timeline (27MHz)
-    std::map<uint16_t, size_t> frames_since_pcr_;
 
     // Audio frame buffering for PES aggregation (reduces overhead, improves playback)
     struct AudioBuffer {
         std::vector<uint8_t> data;
         int64_t first_pts{0};
+        int64_t last_pts{-1};   // of the last frame fed (also after a flush), -1 = none
         size_t frame_count{0};
     };
+    std::map<uint16_t, int64_t> frame_step_;      // per service: PTS from one frame to the next
+    std::map<uint16_t, int64_t> last_audio_pts_;  // per service: PTS of the last frame put out
+    static constexpr int64_t PES_TARGET_PTS = 5400;   // a PES of 60 ms at least (and a PCR within 100 ms)
+    static constexpr int64_t PCR_LEAD_PTS = 36000;    // the PCR is 400 ms before the PTS
     std::map<uint16_t, AudioBuffer> audio_buffers_;
     static constexpr size_t PES_TARGET_SIZE = 1400;  // Target ~1400 bytes per PES (FFmpeg uses ~1355)
 

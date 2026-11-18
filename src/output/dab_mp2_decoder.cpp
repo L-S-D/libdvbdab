@@ -152,8 +152,33 @@ int DabMp2Decoder::parseHeader(const uint8_t* header) {
 }
 
 int DabMp2Decoder::feedFrame(const uint8_t* data, size_t len) {
+    return feedFrame(data, len, next_frame_);
+}
+
+// the first `bytes` of the buffer go: where its new first byte is
+void DabMp2Decoder::consumed(size_t bytes) {
+    if (!feed_len_) return;
+    size_t at = buf_off_ + bytes;
+    buf_frame_ += static_cast<int64_t>(at / feed_len_);
+    buf_off_ = at % feed_len_;
+}
+
+int DabMp2Decoder::feedFrame(const uint8_t* data, size_t len, int64_t frame_no) {
     frame_count_++;
+    next_frame_ = frame_no + 1;
     int frames_extracted = 0;
+    if (len == 0) return 0;
+
+    // Where the buffer begins: with nothing in it, at this frame; a
+    // subchannel of another size than before starts anew
+    if (len != feed_len_ && !buffer_.empty()) {
+        resync();
+    }
+    feed_len_ = len;
+    if (buffer_.empty()) {
+        buf_frame_ = frame_no;
+        buf_off_ = 0;
+    }
 
     // Append to buffer
     buffer_.insert(buffer_.end(), data, data + len);
@@ -209,6 +234,12 @@ int DabMp2Decoder::feedFrame(const uint8_t* data, size_t len) {
         if (callback_) {
             callback_(buffer_.data() + pos, frame_size);
         }
+        if (timed_callback_) {
+            size_t at = buf_off_ + pos;
+            int64_t t = (buf_frame_ + static_cast<int64_t>(at / feed_len_)) * 2160 +
+                        static_cast<int64_t>(at % feed_len_) * 2160 / static_cast<int64_t>(feed_len_);
+            timed_callback_(buffer_.data() + pos, frame_size, t);
+        }
         // the PAD at the end of the frame (EN 300 401 clause 7.4): the F-PAD
         // in the last 2 bytes, before them the ScF-CRC (MPEG-1 below 56 kbit/s
         // per channel 2 bytes, else 4), before that the X-PAD
@@ -226,11 +257,14 @@ int DabMp2Decoder::feedFrame(const uint8_t* data, size_t len) {
     // Remove consumed data
     if (pos > 0) {
         buffer_.erase(buffer_.begin(), buffer_.begin() + pos);
+        consumed(pos);
     }
 
     // Prevent buffer from growing too large
     if (buffer_.size() > frame_size_ * 4) {
-        buffer_.erase(buffer_.begin(), buffer_.begin() + buffer_.size() - frame_size_ * 2);
+        size_t drop = buffer_.size() - frame_size_ * 2;
+        buffer_.erase(buffer_.begin(), buffer_.begin() + drop);
+        consumed(drop);
         synced_ = false;
     }
 
