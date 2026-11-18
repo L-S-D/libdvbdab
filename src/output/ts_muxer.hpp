@@ -39,6 +39,7 @@ inline constexpr uint16_t PID_NULL = 0x1FFF;         ///< Null packet PID
 /// @name Stream Types (ISO/IEC 13818-1 Table 2-36)
 /// @{
 inline constexpr uint8_t STREAM_TYPE_AAC_ADTS = 0x0F;   ///< DAB+ (ISO/IEC 13818-7 AAC ADTS)
+inline constexpr uint8_t STREAM_TYPE_AAC_LATM = 0x11;   ///< DAB+ (ISO/IEC 14496-3 LATM in LOAS)
 inline constexpr uint8_t STREAM_TYPE_MPEG_AUDIO = 0x04; ///< DAB (ISO/IEC 13818-3 MPEG-2 Layer II)
 /// @}
 
@@ -62,6 +63,7 @@ struct TsService {
     std::string name;       ///< Service name (SDT service_name descriptor)
     std::string provider;   ///< Provider name (SDT service_provider descriptor)
     bool dabplus;           ///< true=DAB+ (AAC-LC), false=DAB (MPEG Layer II)
+    bool latm{false};       ///< DAB+ as LATM/LOAS (else ADTS)
     uint8_t subchannel_id;  ///< DAB subchannel ID (for feedAudioFrame lookup)
     int sample_rate{48000}; ///< Audio sample rate in Hz
     int bitrate{0};         ///< Audio bitrate in kbps

@@ -168,6 +168,21 @@ typedef enum {
 
 /* the library has DVBDAB_FORMAT_IPV4 (1.1.0 on) */
 #define DVBDAB_HAVE_FORMAT_IPV4 1
+/* the streamer config has aac_output (2.2.0 on): what becomes of DAB+ audio */
+#define DVBDAB_HAVE_AAC_OUTPUT 1
+/* the AUs as they came, in ADTS (stream type 0x0F). ADTS cannot tell their
+ * 960-sample frames: decoders take 1024 samples per AU, the audio plays 6.7 %
+ * slow and about a semitone low (and so do the PTS) */
+#define DVBDAB_AAC_ADTS       0
+/* the AUs as they came, in LATM/LOAS (stream type 0x11) with the
+ * AudioSpecificConfig of the subchannel: 960 samples per AU, PTS in real
+ * time; few decoders do SBR with 960 (FFmpeg does not: no SBR, 24 kHz) */
+#define DVBDAB_AAC_LATM       1
+/* decoded (faad2, 960 with SBR/PS) and encoded again as AAC-LC with 1024
+ * samples per frame in ADTS (libavcodec): plays right with any decoder; lost
+ * AUs become silence of their length. Only if dvbdab_aac_transcode() says
+ * so, else ADTS */
+#define DVBDAB_AAC_TRANSCODE  2
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
@@ -193,7 +208,15 @@ typedef struct {
 
     /* Optional: known ensemble ID (0 = discover from stream) */
     uint16_t eid;               /* Ensemble ID for TS output TSID */
+
+    /* DAB+ output (DVBDAB_HAVE_AAC_OUTPUT): DVBDAB_AAC_ADTS (0),
+     * DVBDAB_AAC_LATM or DVBDAB_AAC_TRANSCODE */
+    uint8_t aac_output;
 } dvbdab_streamer_config_t;
+
+/* Whether the library was built with the transcoding of DAB+ audio
+ * (DVBDAB_AAC_TRANSCODE: faad2 and libavcodec); 1 yes, 0 no */
+int dvbdab_aac_transcode(void);
 
 /**
  * Create a new unified DAB streamer.

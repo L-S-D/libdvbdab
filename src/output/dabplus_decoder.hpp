@@ -53,6 +53,16 @@ public:
     // Set callback for decoded AAC frames with their AU slot (see above)
     void setTimedCallback(AacTimedFrameCallback cb) { timed_callback_ = std::move(cb); }
 
+    // Put the AUs out as LATM in LOAS (AudioSyncStream, a StreamMuxConfig in
+    // every frame) instead of ADTS: its AudioSpecificConfig says 960 samples
+    // per AU (frameLengthFlag), SBR and PS explicitly
+    void setLatm(bool latm) { latm_ = latm; }
+
+    // The time of an AU in 90 kHz units (valid after the first superframe):
+    // 960 samples (LATM) or the 1024 an ADTS header stands for, at the
+    // sampling rate of the AAC core
+    int64_t getAuDuration90k() const;
+
     // Set callback for DLS text updates
     void setDLSCallback(DLSUpdateCallback cb);
 
@@ -108,6 +118,9 @@ private:
     // Build ADTS header for AAC frame
     void buildAdtsHeader(uint8_t* header, size_t au_len);
 
+    // The LOAS frame of an AU into out (room for len + 32 bytes); its length
+    size_t buildLatmFrame(uint8_t* out, const uint8_t* au, size_t len);
+
     // Process the superframe collected so far (sf_mask_: the frames it has)
     void processSuperframe();
 
@@ -130,6 +143,7 @@ private:
     DabPlusParams params_{};
     AacFrameCallback callback_;
     AacTimedFrameCallback timed_callback_;
+    bool latm_ = false;
     DLSUpdateCallback dls_callback_;
     DLPlusUpdateCallback dlplus_callback_;
 

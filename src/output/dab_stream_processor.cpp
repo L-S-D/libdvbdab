@@ -58,11 +58,17 @@ void DabStreamProcessor::setEnsemble(uint16_t eid, const std::string& name, cons
     muxer_.setEnsemble(eid, name, provider);
 }
 
+void DabStreamProcessor::setAacOutput(int mode) {
+    aac_output_ = (mode == 2 && !AacTranscoder::available()) ? 0 : mode;
+}
+
 void DabStreamProcessor::addService(const TsService& service) {
-    services_.push_back(service);
-    subch_to_sid_[service.subchannel_id] = service.sid;
-    pts_counter_[service.sid] = 90000;  // Start at 1 second
-    muxer_.addService(service);
+    TsService svc = service;
+    svc.latm = aac_output_ == 1 && svc.dabplus;
+    services_.push_back(svc);
+    subch_to_sid_[svc.subchannel_id] = svc.sid;
+    pts_counter_[svc.sid] = 90000;  // Start at 1 second
+    muxer_.addService(svc);
 }
 
 void DabStreamProcessor::startService(uint8_t subchannel_id) {
@@ -79,25 +85,37 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
         if (dabplus_decoders_.find(subchannel_id) == dabplus_decoders_.end()) {
             auto decoder = std::make_unique<DabPlusDecoder>(svc->bitrate);
 
-            decoder->setTimedCallback([this, subchannel_id](const uint8_t* data, size_t len, int64_t au_slot) {
+            decoder->setLatm(aac_output_ == 1);
+            DabPlusDecoder* dec = decoder.get();
+            AacTranscoder* tc = nullptr;
+            if (aac_output_ == 2) {
+                auto t = std::make_unique<AacTranscoder>(svc->bitrate,
+                    [this, subchannel_id](const uint8_t* data, size_t len, int64_t pts) {
+                        auto it = subch_to_sid_.find(subchannel_id);
+                        if (it != subch_to_sid_.end()) {
+                            muxer_.feedAudioFrame(it->second, data, len, pts);
+                        }
+                    });
+                tc = t.get();
+                transcoders_[subchannel_id] = std::move(t);
+            }
+            decoder->setTimedCallback([this, subchannel_id, dec, tc](const uint8_t* data, size_t len, int64_t au_slot) {
                 audio_frame_count_++;
                 if (len < 7) return;
+
+                // decoded and encoded again: its output goes to the muxer
+                if (tc) {
+                    tc->feed(data, len, au_slot, dec->getParams());
+                    return;
+                }
 
                 auto it = subch_to_sid_.find(subchannel_id);
                 if (it == subch_to_sid_.end()) return;
 
-                // Parse sample rate from ADTS header
-                static const int adts_rates[] = {96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350};
-                int sample_rate = 48000;
-                if (data[0] == 0xFF && (data[1] & 0xF0) == 0xF0) {
-                    int sr_idx = (data[2] >> 2) & 0xF;
-                    if (sr_idx < 13) sample_rate = adts_rates[sr_idx];
-                }
-
                 // The AU slot on the time line of the subchannel: lost AUs
-                // leave a gap. A slot lasts 1024 samples, the frame length the
-                // ADTS headers stand for.
-                int64_t pts = 90000 + au_slot * ((int64_t)1024 * 90000 / sample_rate);
+                // leave a gap. A slot lasts an AU: 960 samples (LATM) or the
+                // 1024 the ADTS headers stand for.
+                int64_t pts = 90000 + au_slot * dec->getAuDuration90k();
 
                 muxer_.feedAudioFrame(it->second, data, len, pts);
             });
@@ -161,6 +179,7 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
 
 void DabStreamProcessor::stopService(uint8_t subchannel_id) {
     dabplus_decoders_.erase(subchannel_id);
+    transcoders_.erase(subchannel_id);
     mp2_decoders_.erase(subchannel_id);
 }
 

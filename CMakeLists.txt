@@ -40,6 +40,7 @@ add_library(dvbdab STATIC
     src/output/pad_decoder.cpp
     src/output/ts_muxer.cpp
     src/output/dab_stream_processor.cpp
+    src/output/aac_transcoder.cpp
     src/ts_scanner.cpp
     src/dvbdab_c.cpp
     src/etina_pipeline.cpp
@@ -51,6 +52,34 @@ target_include_directories(dvbdab PUBLIC
 )
 find_package(ZLIB REQUIRED)
 target_link_libraries(dvbdab pthread ZLIB::ZLIB ${PUGIXML_LIBRARIES})
+
+# DAB+ transcoding (DVBDAB_AAC_TRANSCODE): faad2 decodes the 960-sample AUs
+# with SBR/PS, libavcodec encodes AAC-LC; both found, it is built in. faad2 is
+# GPL: a library built with it is GPL as a whole.
+option(DVBDAB_TRANSCODE "DAB+ audio transcoding with faad2 and libavcodec (when found)" ON)
+set(DVBDAB_PC_LIBS "")
+if(DVBDAB_TRANSCODE)
+    pkg_check_modules(FAAD2 QUIET faad2)
+    pkg_check_modules(LIBAV QUIET libavcodec libavutil)
+    if(FAAD2_FOUND AND LIBAV_FOUND)
+        target_compile_definitions(dvbdab PRIVATE DVBDAB_WITH_TRANSCODE)
+        target_include_directories(dvbdab PRIVATE ${FAAD2_INCLUDE_DIRS} ${LIBAV_INCLUDE_DIRS})
+        # the headers of that libavcodec first: another FFmpeg in a default
+        # include directory (/usr/local/include) must not shadow them
+        pkg_get_variable(DVBDAB_AVCODEC_INCDIR libavcodec includedir)
+        if(DVBDAB_AVCODEC_INCDIR)
+            target_compile_options(dvbdab BEFORE PRIVATE "SHELL:-isystem ${DVBDAB_AVCODEC_INCDIR}")
+        endif()
+        target_link_libraries(dvbdab ${FAAD2_LINK_LIBRARIES} ${LIBAV_LINK_LIBRARIES})
+        # dvbdab.pc: what it was built against (a static library: its users
+        # link these), not a pkg-config lookup of theirs
+        string(JOIN " " DVBDAB_PC_LIBS ${FAAD2_LDFLAGS} ${LIBAV_LDFLAGS})
+        set(DVBDAB_PC_LIBS " ${DVBDAB_PC_LIBS}")
+        message(STATUS "DAB+ transcoding: faad2 ${FAAD2_VERSION}, libavcodec ${LIBAV_libavcodec_VERSION}")
+    else()
+        message(STATUS "DAB+ transcoding: off (faad2 or libavcodec not found)")
+    endif()
+endif()
 target_link_directories(dvbdab PUBLIC ${PUGIXML_LIBRARY_DIRS})
 # linked into position independent executables (tvheadend links with -pie),
 # also with compilers that do not build PIE by default
@@ -100,6 +129,7 @@ add_executable(test_stream_processor
     tests/test_stream_processor.cpp
     src/output/ts_muxer.cpp
     src/output/dab_stream_processor.cpp
+    src/output/aac_transcoder.cpp
     src/output/dabplus_decoder.cpp
     src/output/dab_mp2_decoder.cpp
     src/output/pad_decoder.cpp
@@ -281,6 +311,7 @@ install(FILES
     src/output/ts_streamer.hpp
     src/output/dab_stream_processor.hpp
     src/output/dabplus_decoder.hpp
+    src/output/aac_transcoder.hpp
     src/output/dab_mp2_decoder.hpp
     src/output/pad_decoder.hpp
     src/output/metadata_bridge.hpp

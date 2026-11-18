@@ -74,6 +74,86 @@ bool DabPlusDecoder::checkAuCrc(const uint8_t* buf, size_t len) {
     return crc16_ccitt_verify(buf, len);
 }
 
+namespace {
+
+// MSB first into a buffer
+class BitWriter {
+public:
+    explicit BitWriter(uint8_t* out) : out_(out) {}
+    void put(uint32_t value, int bits) {
+        for (int i = bits - 1; i >= 0; i--) {
+            if ((pos_ & 7) == 0) out_[pos_ >> 3] = 0;
+            if ((value >> i) & 1) out_[pos_ >> 3] |= 0x80 >> (pos_ & 7);
+            pos_++;
+        }
+    }
+    size_t bytes() const { return (pos_ + 7) / 8; }
+private:
+    uint8_t* out_;
+    size_t pos_ = 0;
+};
+
+} // namespace
+
+int64_t DabPlusDecoder::getAuDuration90k() const {
+    int out_rate = params_.dac_rate ? 48000 : 32000;
+    int core_rate = params_.sbr_flag ? out_rate / 2 : out_rate;
+    return static_cast<int64_t>(latm_ ? 960 : 1024) * 90000 / core_rate;
+}
+
+size_t DabPlusDecoder::buildLatmFrame(uint8_t* out, const uint8_t* au, size_t len) {
+    // sampling frequency indices: 48000 3, 32000 5, 24000 6, 16000 8
+    int out_rate_idx = params_.dac_rate ? 3 : 5;
+    int core_rate_idx = params_.sbr_flag ? (params_.dac_rate ? 6 : 8) : out_rate_idx;
+    bool ps = params_.sbr_flag && params_.ps_flag;
+    // PS: a mono core; MPEG Surround is left to its core as with ADTS
+    int channels = (params_.aac_channel_mode && !ps) ? 2 : 1;
+
+    BitWriter b(out + 3);
+    // AudioMuxElement(muxConfigPresent = 1): the config in every frame
+    b.put(0, 1);                     // useSameStreamMux
+    // StreamMuxConfig
+    b.put(0, 1);                     // audioMuxVersion
+    b.put(1, 1);                     // allStreamsSameTimeFraming
+    b.put(0, 6);                     // numSubFrames
+    b.put(0, 4);                     // numProgram
+    b.put(0, 3);                     // numLayer
+    // AudioSpecificConfig (ISO/IEC 14496-3 1.6.2.1), SBR/PS explicit
+    if (params_.sbr_flag) {
+        b.put(ps ? 29 : 5, 5);       // audioObjectType: PS / SBR
+        b.put(core_rate_idx, 4);     // samplingFrequencyIndex (core)
+        b.put(channels, 4);          // channelConfiguration
+        b.put(out_rate_idx, 4);      // extensionSamplingFrequencyIndex
+        b.put(2, 5);                 // audioObjectType: AAC LC
+    } else {
+        b.put(2, 5);
+        b.put(core_rate_idx, 4);
+        b.put(channels, 4);
+    }
+    b.put(1, 1);                     // GASpecificConfig: frameLengthFlag, 960
+    b.put(0, 1);                     // dependsOnCoreCoder
+    b.put(0, 1);                     // extensionFlag
+    b.put(0, 3);                     // frameLengthType 0
+    b.put(0xff, 8);                  // latmBufferFullness
+    b.put(0, 1);                     // otherDataPresent
+    b.put(0, 1);                     // crcCheckPresent
+    // PayloadLengthInfo: 255s, then the rest; PayloadMux
+    size_t n = len;
+    while (n >= 255) {
+        b.put(255, 8);
+        n -= 255;
+    }
+    b.put(static_cast<uint32_t>(n), 8);
+    for (size_t i = 0; i < len; i++) b.put(au[i], 8);
+
+    // AudioSyncStream: syncword 0x2B7, audioMuxLengthBytes
+    size_t ame = b.bytes();
+    out[0] = 0x56;
+    out[1] = 0xe0 | ((ame >> 8) & 0x1f);
+    out[2] = ame & 0xff;
+    return 3 + ame;
+}
+
 void DabPlusDecoder::buildAdtsHeader(uint8_t* header, size_t au_len) {
     // Sample rate index for ADTS - uses core rates for implicit SBR signaling
     // Decoders detect SBR in bitstream and upsample automatically
@@ -368,15 +448,21 @@ void DabPlusDecoder::processSuperframe() {
         }
 
         // Build ADTS frame and emit
-        if ((callback_ || timed_callback_) && au_data_len > 0 && au_data_len < output_buf_.size() - 7) {
-            buildAdtsHeader(output_buf_.data(), au_data_len);
-            std::copy(sf + au_start[i], sf + au_start[i] + au_data_len, output_buf_.data() + 7);
+        if ((callback_ || timed_callback_) && au_data_len > 0 && au_data_len + 32 < output_buf_.size()) {
+            size_t out_len;
+            if (latm_) {
+                out_len = buildLatmFrame(output_buf_.data(), sf + au_start[i], au_data_len);
+            } else {
+                buildAdtsHeader(output_buf_.data(), au_data_len);
+                std::copy(sf + au_start[i], sf + au_start[i] + au_data_len, output_buf_.data() + 7);
+                out_len = au_data_len + 7;
+            }
             if (callback_) {
-                callback_(output_buf_.data(), au_data_len + 7);
+                callback_(output_buf_.data(), out_len);
             }
             if (timed_callback_) {
                 // num_aus slots per superframe of 5 frames
-                timed_callback_(output_buf_.data(), au_data_len + 7,
+                timed_callback_(output_buf_.data(), out_len,
                                 sf_start_ * params_.num_aus / 5 + i);
             }
             au_count_++;

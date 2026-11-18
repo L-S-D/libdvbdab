@@ -389,6 +389,11 @@ static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t 
 
 extern "C" { // Resume C API
 
+int dvbdab_aac_transcode(void)
+{
+    return AacTranscoder::available() ? 1 : 0;
+}
+
 dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config)
 {
     if (!config) return nullptr;
@@ -566,6 +571,7 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
     if (!streamer->processor) {
         try {
             streamer->processor = std::make_unique<DabStreamProcessor>();
+            streamer->processor->setAacOutput(streamer->config.aac_output);
             streamer->processor->setOutput([streamer](const uint8_t* data, size_t len) {
                 streamer->ts_output_count++;
                 streamer->ts_output_bytes += len;

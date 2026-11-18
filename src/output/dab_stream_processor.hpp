@@ -4,6 +4,7 @@
 
 #include "ts_muxer.hpp"
 #include "dabplus_decoder.hpp"
+#include "aac_transcoder.hpp"
 #include "dab_mp2_decoder.hpp"
 #include "../parsers/packet_decoder.hpp"
 #include "../parsers/ehb_parser.hpp"
@@ -40,6 +41,11 @@ public:
 
     // Start all configured services
     void startAllServices();
+
+    // What becomes of DAB+ audio (DVBDAB_AAC_ADTS 0, _LATM 1, _TRANSCODE 2 of
+    // dvbdab_c.h; transcoding only if built with it, else ADTS); before the
+    // services are added
+    void setAacOutput(int mode);
 
     // Feed an ETI-NI frame - THE main entry point
     // Handles audio decoding, EPG extraction, and TS output
@@ -104,6 +110,8 @@ private:
 
     // Frame numbers from the FCT of the ETI frames (24 ms each), the last
     // frame number each MP2 subchannel got
+    int aac_output_{0};
+    std::map<uint8_t, std::unique_ptr<AacTranscoder>> transcoders_;
     int last_fct_{-1};
     int64_t frame_no_{0};
     std::map<uint8_t, int64_t> mp2_last_frame_;

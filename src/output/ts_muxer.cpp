@@ -205,7 +205,8 @@ void TsMuxer::outputPmt(const TsService& service) {
     section.push_back(0x00);
 
     // Elementary stream entry
-    uint8_t stream_type = service.dabplus ? STREAM_TYPE_AAC_ADTS : STREAM_TYPE_MPEG_AUDIO;
+    uint8_t stream_type = !service.dabplus ? STREAM_TYPE_MPEG_AUDIO :
+                          service.latm ? STREAM_TYPE_AAC_LATM : STREAM_TYPE_AAC_ADTS;
     section.push_back(stream_type);
 
     // reserved(3) + elementary_PID(13)
