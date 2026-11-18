@@ -21,6 +21,9 @@ DabPlusDecoder::DabPlusDecoder(int bitrate)
 // Destructor must be in .cpp where PadDecoder is complete
 DabPlusDecoder::~DabPlusDecoder() = default;
 
+size_t DabPlusDecoder::getLabelCount() const { return pad_decoder_->getDLSCount(); }
+size_t DabPlusDecoder::getPadCrcErrors() const { return pad_decoder_->getCrcErrors(); }
+
 void DabPlusDecoder::setDLSCallback(DLSUpdateCallback cb) {
     dls_callback_ = std::move(cb);
     if (pad_decoder_) {

@@ -96,6 +96,9 @@ public:
     /// frame: UTC in ms since 1970. false when it sent none.
     bool getUtc(const StreamKey& key, int64_t& utc_ms) const;
 
+    /// EDI: frames of a stream that were put together from AF packets with lost PF fragments
+    size_t getPartialFrames(const StreamKey& key) const;
+
     // Reset all state
     void reset();
 

@@ -249,6 +249,18 @@ per process, not per handle.
 - What `get_*` functions return belongs to the caller and is freed with the
   `free_*` function next to it; it may be used from any thread.
 
+### Statistics
+
+`dvbdab_streamer_get_stats()` counts what came in and went out: ETI frames,
+frames missing by their counter, ETI-NA and TS NI frames with a bad CRC, EDI
+frames put together from incomplete packets, TS packets.
+`dvbdab_streamer_get_service_stats()` has the same for one service: frames,
+audio units (DAB+ AUs, MP2 frames), the ones lost or dropped by their CRC,
+what the transcoder could not decode, dynamic labels, and what the service
+is put out as. Both take the size of the caller's structure, so a program
+built with an older header keeps working. [examples/streamer.c](examples/streamer.c)
+prints them.
+
 ### Versions
 
 `dvbdab_c.h` has the version it describes (`DVBDAB_VERSION_MAJOR`, `_MINOR`,
@@ -264,6 +276,7 @@ asked at compile time:
 | `DVBDAB_HAVE_WANTED_PIDS` | 2.2.0 | `dvbdab_streamer_set_wanted_pids()` |
 | `DVBDAB_HAVE_RDS` | 2.3.0 | dynamic labels as RDS RadioText in the TS |
 | `DVBDAB_LABEL_SIZE` | 2.5.0 | labels of 65 bytes (17 before), `dvbdab_version()` |
+| `DVBDAB_HAVE_STATS` | 2.5.0 | `dvbdab_streamer_get_stats()`, `dvbdab_streamer_get_service_stats()` |
 | `DVBDAB_HAVE_SERVICE_INFO` | 2.5.0 | language and programme type of a service, country and LTO of the ensemble, `dvbdab_streamer_get_time()` |
 
 [CHANGELOG.md](CHANGELOG.md) has what each version changed.

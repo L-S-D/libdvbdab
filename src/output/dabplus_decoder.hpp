@@ -110,6 +110,8 @@ public:
     size_t getAusLost() const { return aus_lost_; }               // AUs in lost frames
     size_t getSuperframesNoHeader() const { return sf_no_header_; } // first frame lost
     size_t getSyncLosses() const { return sync_losses_; }
+    size_t getLabelCount() const;      // dynamic labels that came whole
+    size_t getPadCrcErrors() const;    // PAD data groups dropped by their CRC
 
 private:
     // FireCode CRC check (bytes 0-1 vs bytes 2-10)

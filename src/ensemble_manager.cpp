@@ -128,6 +128,11 @@ bool EnsembleManager::getUtc(const StreamKey& key, int64_t& utc_ms) const {
     return it != parsers_.end() && it->second->utc_now(utc_ms);
 }
 
+size_t EnsembleManager::getPartialFrames(const StreamKey& key) const {
+    auto it = parsers_.find(key);
+    return it == parsers_.end() ? 0 : static_cast<size_t>(it->second->partial_af_count());
+}
+
 void EnsembleManager::processIpPacket(const uint8_t* ip_data, size_t len) {
     if (len < 28) return;  // Need at least IP + UDP header
 

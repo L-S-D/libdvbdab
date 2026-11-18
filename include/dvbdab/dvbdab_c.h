@@ -207,6 +207,8 @@ typedef enum {
  * ensemble, dvbdab_streamer_get_time(); the TS has the language in the PMT,
  * language and content in the EIT, and a TDT (2.5.0 on) */
 #define DVBDAB_HAVE_SERVICE_INFO 1
+/* dvbdab_streamer_get_stats(), dvbdab_streamer_get_service_stats() (2.5.0 on) */
+#define DVBDAB_HAVE_STATS 1
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
  * subchannels of EDI packets with lost fragments (2.1.0 on); the DAB+ output
@@ -341,6 +343,69 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
  * @param count     Number of ensembles in array
  */
 void dvbdab_streamer_free_all_ensembles(dvbdab_ensemble_t *ensembles, int count);
+
+/*
+ * Statistics (DVBDAB_HAVE_STATS, 2.5.0 on). All counters count from the
+ * creation of the streamer (those of a service: from its start) and never
+ * go back. Both calls take the size of the caller's structure and fill at
+ * most that much: a caller built with an older header gets the fields it
+ * knows.
+ */
+typedef struct {
+    uint64_t eti_frames;         /* ETI frames that went to the services */
+    uint64_t eti_frames_lost;    /* frames missing by the frame counter */
+    uint64_t eti_bad_frames;     /* ETI-NA, TS NI: frames dropped for the CRC of their header */
+    uint64_t eti_bad_data;       /* ETI-NA, TS NI: frames whose data CRC failed (FIC not
+                                    read, their subchannels count as lost) */
+    uint64_t etina_resyncs;      /* ETI-NA: times the frame sync was searched anew */
+    uint64_t edi_partial_frames; /* EDI: frames from AF packets with lost PF fragments */
+    uint64_t ts_packets;         /* TS packets put out */
+    uint32_t services;           /* services of the output */
+    uint32_t services_started;   /* of them started */
+} dvbdab_stats_t;
+
+/* output of a service */
+#define DVBDAB_OUT_MP2      0    /* DAB: MPEG Layer II as it came */
+#define DVBDAB_OUT_ADTS     1    /* DAB+: the AUs in ADTS */
+#define DVBDAB_OUT_LATM     2    /* DAB+: the AUs in LATM/LOAS */
+#define DVBDAB_OUT_AAC_LC   3    /* DAB+: transcoded to AAC-LC (ADTS) */
+
+typedef struct {
+    uint64_t frames;             /* frames of its subchannel that came */
+    uint64_t audio_units;        /* DAB+ AUs or MP2 frames taken out of them */
+    uint64_t audio_units_lost;   /* DAB+: AUs of lost frames and of superframes without their header */
+    uint64_t crc_errors;         /* DAB+: AUs dropped by their CRC */
+    uint64_t sync_losses;        /* DAB+: superframe sync lost; DAB: frames without an MP2 header */
+    uint64_t transcode_errors;   /* AUs the decoder of the transcoder refused */
+    uint64_t silent_units;       /* AUs the transcoder put out as silence */
+    uint64_t labels;             /* dynamic labels that came whole */
+    uint64_t pad_crc_errors;     /* PAD data groups dropped by their CRC */
+    int dabplus;                 /* 1 for DAB+, 0 for DAB */
+    int output;                  /* DVBDAB_OUT_* */
+    int started;                 /* 1 if the service is started */
+    int transcoding;             /* 1 while its transcoder runs (DVBDAB_AAC_TRANSCODE
+                                    and its PIDs are wanted) */
+} dvbdab_service_stats_t;
+
+/**
+ * Statistics of a streamer.
+ * @param streamer Streamer handle
+ * @param stats    Output
+ * @param size     sizeof(*stats) of the caller
+ * @return         0 on success, -1 on error
+ */
+int dvbdab_streamer_get_stats(dvbdab_streamer_t *streamer, dvbdab_stats_t *stats, size_t size);
+
+/**
+ * Statistics of one service of a streamer.
+ * @param streamer      Streamer handle
+ * @param subchannel_id Its subchannel ID
+ * @param stats         Output
+ * @param size          sizeof(*stats) of the caller
+ * @return              0 on success, -1 if there is no such service (yet)
+ */
+int dvbdab_streamer_get_service_stats(dvbdab_streamer_t *streamer, int subchannel_id,
+                                       dvbdab_service_stats_t *stats, size_t size);
 
 /**
  * The date and time the ensemble sends (FIG 0/10), as of the last frame

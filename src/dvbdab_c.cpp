@@ -304,6 +304,7 @@ struct dvbdab_streamer {
     bool etina_detected{false};  // True once pipeline is producing ETI frames
     int etina_bad_frames{0};     // frames with a wrong header in a row
     bool etina_resync{false};    // search the E1 sync anew after this feed
+    uint64_t etina_resyncs{0};   // how often that was done
 
     // Partial TS packet buffer for ETI-NA/TSNI (handles unaligned input chunks)
     std::vector<uint8_t> ts_buffer;
@@ -467,6 +468,63 @@ unsigned int dvbdab_version(void)
 const char *dvbdab_version_string(void)
 {
     return DVBDAB_STR(DVBDAB_VERSION_MAJOR) "." DVBDAB_STR(DVBDAB_VERSION_MINOR) "." DVBDAB_STR(DVBDAB_VERSION_PATCH);
+}
+
+int dvbdab_streamer_get_stats(dvbdab_streamer_t *streamer, dvbdab_stats_t *stats, size_t size)
+{
+    if (!streamer || !stats || size == 0) return -1;
+    try {
+        dvbdab_stats_t st;
+        memset(&st, 0, sizeof(st));
+        if (streamer->manager) {
+            st.eti_bad_frames = streamer->manager->getEtiBadHeaders();
+            st.eti_bad_data = streamer->manager->getEtiBadData();
+            st.edi_partial_frames = streamer->manager->getPartialFrames(streamer->stream_key);
+        }
+        st.etina_resyncs = streamer->etina_resyncs;
+        if (streamer->processor) {
+            st.eti_frames = streamer->processor->getEtiFrameCount();
+            st.eti_frames_lost = streamer->processor->getEtiFramesLost();
+            st.ts_packets = streamer->processor->getTsPacketCount();
+            for (const auto& svc : streamer->processor->getServices()) {
+                st.services++;
+                if (streamer->processor->isStarted(svc.subchannel_id)) st.services_started++;
+            }
+        }
+        memcpy(stats, &st, size < sizeof(st) ? size : sizeof(st));
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int dvbdab_streamer_get_service_stats(dvbdab_streamer_t *streamer, int subchannel_id,
+                                       dvbdab_service_stats_t *stats, size_t size)
+{
+    if (!streamer || !stats || size == 0 || !streamer->processor || subchannel_id < 0 || subchannel_id > 63) return -1;
+    try {
+        DabStreamProcessor::ServiceStats in;
+        if (!streamer->processor->getServiceStats(static_cast<uint8_t>(subchannel_id), in)) return -1;
+        dvbdab_service_stats_t st;
+        memset(&st, 0, sizeof(st));
+        st.frames = in.frames;
+        st.audio_units = in.audio_units;
+        st.audio_units_lost = in.audio_units_lost;
+        st.crc_errors = in.crc_errors;
+        st.sync_losses = in.sync_losses;
+        st.transcode_errors = in.transcode_errors;
+        st.silent_units = in.silent_units;
+        st.labels = in.labels;
+        st.pad_crc_errors = in.pad_crc_errors;
+        st.dabplus = in.dabplus ? 1 : 0;
+        st.output = in.output;
+        st.started = in.started ? 1 : 0;
+        st.transcoding = in.transcoding ? 1 : 0;
+        memcpy(stats, &st, size < sizeof(st) ? size : sizeof(st));
+        return 0;
+    } catch (...) {
+        return -1;
+    }
 }
 
 int dvbdab_streamer_get_time(dvbdab_streamer_t *streamer, int64_t *utc_ms)
@@ -719,6 +777,7 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
             streamer->etina_pipeline = EtinaPipelineState{};
             streamer->etina_bad_frames = 0;
             streamer->etina_resync = false;
+            streamer->etina_resyncs++;
         }
         break;
     }

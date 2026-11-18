@@ -91,6 +91,26 @@ public:
 
     // Statistics
     size_t getEtiFrameCount() const { return eti_frame_count_; }
+    size_t getEtiFramesLost() const { return eti_frames_lost_; }   ///< frames missing by the frame counter
+
+    /// What became of the frames of one service
+    struct ServiceStats {
+        bool dabplus{false};
+        bool started{false};
+        bool transcoding{false};      ///< its transcoder runs
+        int output{0};                ///< 0 MP2, 1 AAC in ADTS, 2 AAC in LATM, 3 AAC-LC transcoded
+        uint64_t frames{0};           ///< frames of its subchannel that came
+        uint64_t audio_units{0};      ///< DAB+ AUs or MP2 frames taken out of them
+        uint64_t audio_units_lost{0}; ///< DAB+: AUs of lost frames and of superframes without their header
+        uint64_t crc_errors{0};       ///< DAB+: AUs dropped by their CRC
+        uint64_t sync_losses{0};      ///< DAB+: superframe sync lost; DAB: frames without an MP2 header
+        uint64_t transcode_errors{0}; ///< AUs the decoder of the transcoder refused
+        uint64_t silent_units{0};     ///< AUs the transcoder put out as silence
+        uint64_t labels{0};           ///< dynamic labels that came whole
+        uint64_t pad_crc_errors{0};   ///< PAD data groups dropped by their CRC
+    };
+    /// false when no service has this subchannel
+    bool getServiceStats(uint8_t subchannel_id, ServiceStats& stats) const;
     size_t getAudioFrameCount() const { return audio_frame_count_; }
     size_t getEpgScheduleCount() const { return epg_schedule_count_; }
     size_t getTsPacketCount() const { return muxer_.getPacketCount(); }
@@ -147,6 +167,7 @@ private:
 
     // Statistics
     size_t eti_frame_count_{0};
+    size_t eti_frames_lost_{0};
     size_t audio_frame_count_{0};
     size_t epg_schedule_count_{0};
 };

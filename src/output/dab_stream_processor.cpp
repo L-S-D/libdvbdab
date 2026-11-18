@@ -134,6 +134,43 @@ bool DabStreamProcessor::isStarted(uint8_t subchannel_id) const {
     return dabplus_decoders_.count(subchannel_id) != 0 || mp2_decoders_.count(subchannel_id) != 0;
 }
 
+bool DabStreamProcessor::getServiceStats(uint8_t subchannel_id, ServiceStats& st) const {
+    const TsService* svc = nullptr;
+    for (const auto& s : services_) {
+        if (s.subchannel_id == subchannel_id) svc = &s;
+    }
+    if (!svc) return false;
+
+    st = ServiceStats{};
+    st.dabplus = svc->dabplus;
+    st.started = isStarted(subchannel_id);
+    st.output = !svc->dabplus ? 0 : aac_output_ == 1 ? 2 : aac_output_ == 2 ? 3 : 1;
+    if (auto it = dabplus_decoders_.find(subchannel_id); it != dabplus_decoders_.end()) {
+        const DabPlusDecoder& d = *it->second;
+        st.frames = d.getFrameCount();
+        st.audio_units = d.getAuCount();
+        st.audio_units_lost = d.getAusLost();
+        st.crc_errors = d.getCrcErrors();
+        st.sync_losses = d.getSyncLosses();
+        st.labels = d.getLabelCount();
+        st.pad_crc_errors = d.getPadCrcErrors();
+    }
+    if (auto it = mp2_decoders_.find(subchannel_id); it != mp2_decoders_.end()) {
+        const DabMp2Decoder& d = *it->second;
+        st.frames = d.getFrameCount();
+        st.audio_units = d.getMp2FrameCount();
+        st.sync_losses = d.getSyncErrors();
+        st.labels = d.getLabelCount();
+        st.pad_crc_errors = d.getPadCrcErrors();
+    }
+    if (auto it = transcoders_.find(subchannel_id); it != transcoders_.end() && it->second) {
+        st.transcoding = true;
+        st.transcode_errors = it->second->getDecodeErrors();
+        st.silent_units = it->second->getSilentAus();
+    }
+    return true;
+}
+
 void DabStreamProcessor::startService(uint8_t subchannel_id) {
     const TsService* svc = nullptr;
     for (const auto& s : services_) {
@@ -305,6 +342,7 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
         int d = (fct - last_fct_ + 250) % 250;
         if (d == 0) return;
         frame_no_ += d;
+        eti_frames_lost_ += static_cast<size_t>(d - 1);
     }
     if (fct < 250) last_fct_ = fct;
     eti_frame_count_++;

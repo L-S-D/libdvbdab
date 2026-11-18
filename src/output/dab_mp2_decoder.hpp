@@ -68,6 +68,8 @@ public:
     size_t getFrameCount() const { return frame_count_; }
     size_t getMp2FrameCount() const { return mp2_frame_count_; }
     size_t getSyncErrors() const { return sync_errors_; }
+    size_t getLabelCount() const;      // dynamic labels that came whole
+    size_t getPadCrcErrors() const;    // PAD data groups dropped by their CRC
 
 private:
     // Parse MP2 header and return frame size, or 0 if invalid

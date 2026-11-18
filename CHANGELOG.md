@@ -40,6 +40,9 @@ Service information
   descriptor. A TDT (PID 0x14) with the time of the ensemble every 5 s.
 
 C API
+- Statistics (`DVBDAB_HAVE_STATS`): `dvbdab_streamer_get_stats()` and
+  `dvbdab_streamer_get_service_stats()` - frames that came, were lost or
+  failed a CRC, audio units, transcoder errors, labels, TS packets.
 - `dvbdab_version()`, `dvbdab_version_string()`, `DVBDAB_VERSION_PATCH`.
 - Labels in `dvbdab_service_t` and `dvbdab_ensemble_t` have
   `DVBDAB_LABEL_SIZE` (65) bytes instead of 17, which cut labels with

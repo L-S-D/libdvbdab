@@ -87,6 +87,41 @@ int main(int argc, char **argv)
         }
     }
 
+    /* What the ensemble said about itself in the meantime, and what became
+     * of its frames */
+    dvbdab_ensemble_t *e = dvbdab_streamer_get_ensemble(streamer);
+    if (e) {
+        int64_t utc_ms;
+        if (dvbdab_streamer_get_time(streamer, &utc_ms)) {
+            fprintf(stderr, "time of the ensemble: %lld s since 1970 (UTC)", (long long)(utc_ms / 1000));
+            if (e->has_country) {
+                fprintf(stderr, ", local time %+d min, ECC 0x%02X", e->lto_half_hours * 30, e->ecc);
+            }
+            fprintf(stderr, "\n");
+        }
+        for (int i = 0; i < e->service_count; i++) {
+            const dvbdab_service_t *sv = &e->services[i];
+            dvbdab_service_stats_t st;
+            if (dvbdab_streamer_get_service_stats(streamer, sv->subchannel_id, &st, sizeof(st)) != 0) {
+                continue;
+            }
+            fprintf(stderr, "  0x%04x \"%s\": language %s, programme type %d; %llu frames, %llu audio units, "
+                            "%llu lost, %llu CRC errors, %llu labels\n",
+                    (unsigned)sv->sid, sv->label, sv->language[0] ? sv->language : "-", sv->pty,
+                    (unsigned long long)st.frames, (unsigned long long)st.audio_units,
+                    (unsigned long long)st.audio_units_lost, (unsigned long long)st.crc_errors,
+                    (unsigned long long)st.labels);
+        }
+        dvbdab_streamer_free_ensemble(e);
+    }
+    dvbdab_stats_t st;
+    if (dvbdab_streamer_get_stats(streamer, &st, sizeof(st)) == 0) {
+        fprintf(stderr, "%llu ETI frames (%llu lost, %llu with a bad header, %llu with bad data), %llu TS packets\n",
+                (unsigned long long)st.eti_frames, (unsigned long long)st.eti_frames_lost,
+                (unsigned long long)st.eti_bad_frames, (unsigned long long)st.eti_bad_data,
+                (unsigned long long)st.ts_packets);
+    }
+
     dvbdab_streamer_destroy(streamer);
     return started ? 0 : 1;
 }

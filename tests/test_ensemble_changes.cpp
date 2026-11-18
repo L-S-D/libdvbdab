@@ -177,6 +177,7 @@ struct TsOut {
     std::set<uint16_t> programs;             // of the last PAT
     std::map<uint16_t, std::string> names;   // of the last SDT sections
     int pat_version = -1, pat_changes = 0;
+    uint64_t packets = 0;
     void section(uint16_t pid, const uint8_t* s, size_t n) {
         if (pid == 0 && s[0] == 0x00) {
             int v = (s[5] >> 1) & 0x1F;
@@ -202,6 +203,7 @@ struct TsOut {
         }
     }
     void feed(const uint8_t* d, size_t len) {
+        packets += len / 188;
         for (size_t o = 0; o + 188 <= len; o += 188) {
             const uint8_t* k = d + o;
             uint16_t pid = static_cast<uint16_t>((k[1] & 0x1F) << 8 | k[2]);
@@ -538,6 +540,32 @@ int main() {
             check(dvbdab_streamer_get_time(s3.s, &ms) == 1 && ms >= t * 1000 && ms < t * 1000 + 7 * 24,
                   "the time of the ensemble goes on with the frames");
             dvbdab_streamer_free_ensemble(e);
+
+            // statistics: what came, what was lost
+            dvbdab_stats_t st;
+            dvbdab_service_stats_t sv;
+            check(dvbdab_streamer_get_stats(s3.s, &st, sizeof(st)) == 0 && st.services == 2 && st.services_started == 2 &&
+                      st.eti_frames > 100 && st.eti_frames <= 200 && st.eti_frames_lost == 0 && st.ts_packets > 0 &&
+                      st.ts_packets == s3.out.packets && st.edi_partial_frames == 0,
+                  "statistics of a streamer: frames, services, TS packets");
+            check(dvbdab_streamer_get_service_stats(s3.s, 1, &sv, sizeof(sv)) == 0 && sv.dabplus == 1 && sv.started == 1 &&
+                      sv.output == DVBDAB_OUT_ADTS && sv.transcoding == 0 && sv.frames > 100 && sv.audio_units > 0 &&
+                      sv.crc_errors == 0,
+                  "statistics of a service: frames and AUs of a DAB+ service");
+            check(dvbdab_streamer_get_service_stats(s3.s, 9, &sv, sizeof(sv)) == -1 &&
+                      dvbdab_streamer_get_service_stats(s3.s, 64, &sv, sizeof(sv)) == -1,
+                  "no statistics for a subchannel no service has");
+            uint64_t before = st.eti_frames;
+            s3.frame += 3;   // three frames never come
+            s3.run(info, {1, 2}, 50);
+            check(dvbdab_streamer_get_stats(s3.s, &st, sizeof(st)) == 0 && st.eti_frames_lost == 3 &&
+                      st.eti_frames == before + 50,
+                  "three frames that never came are counted as lost");
+            // a caller built with a shorter structure gets what fits
+            uint64_t two[3] = {0, 0, 0x1122334455667788ull};
+            check(dvbdab_streamer_get_stats(s3.s, reinterpret_cast<dvbdab_stats_t*>(two), 2 * sizeof(uint64_t)) == 0 &&
+                      two[0] == st.eti_frames && two[1] == 3 && two[2] == 0x1122334455667788ull,
+                  "a shorter structure of the caller is filled as far as it goes");
         }
         check(st.out.programs == (std::set<uint16_t>{0x1001, 0x1002}) && st.out.pat_changes > v,
               "a service that comes while the stream runs is in a new version of the PAT");

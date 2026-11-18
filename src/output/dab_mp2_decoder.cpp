@@ -71,6 +71,9 @@ DabMp2Decoder::DabMp2Decoder(int bitrate)
 
 DabMp2Decoder::~DabMp2Decoder() = default;
 
+size_t DabMp2Decoder::getLabelCount() const { return pad_->getDLSCount(); }
+size_t DabMp2Decoder::getPadCrcErrors() const { return pad_->getCrcErrors(); }
+
 void DabMp2Decoder::setDLSCallback(std::function<void(const std::string& text)> cb) {
     pad_->setDLSCallback(std::move(cb));
 }
