@@ -21,8 +21,23 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     subchannels whose bytes came are still taken (the TAG items of the last
     complete AF packet locate them); the others are marked
     (`EtiFrameExCallback`), the C API streamer uses it.
-  - DAB+ AUs are 960-sample frames; the ADTS output cannot say so, decoders
-    take 1024 samples per AU, and so do the PTS.
+
+- **DAB+ output** (`aac_output` of the streamer config, 2.2 on)
+  - DAB+ AUs are 960-sample frames. ADTS cannot say so: decoders take 1024
+    samples per AU, and the audio plays 6.7 % slow and about a semitone low.
+  - `DVBDAB_AAC_ADTS` (the default): the AUs in ADTS, the PTS on that 1024
+    time line.
+  - `DVBDAB_AAC_LATM`: the AUs as they came, in LATM/LOAS (stream type 0x11)
+    with the AudioSpecificConfig of the subchannel (frameLengthFlag, SBR and
+    PS signalled explicitly), PTS in real time. Few decoders do SBR with 960
+    samples; FFmpeg does not (24 kHz core only).
+  - `DVBDAB_AAC_TRANSCODE`: decoded with faad2 (960 with SBR and PS) and
+    encoded again with libavcodec as AAC-LC in ADTS, 128 kbit/s per channel:
+    plays right with any decoder; lost AUs become silence of their length.
+    It costs about a tenth of a CPU core per service, so only the services
+    whose PMT or audio PID is wanted are transcoded
+    (`dvbdab_streamer_set_wanted_pids()`; all until it is called).
+    `dvbdab_aac_transcode()` says whether the library was built with it.
 
 - **Multiple Input Formats**
   | Format | Description | Source |
@@ -52,9 +67,11 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 ### Requirements
 
 - GCC 10+ or Clang 12+ (C++17 required)
-- CMake 3.16+
+- CMake 3.20+
 - zlib
 - pugixml
+- Optional, for `DVBDAB_AAC_TRANSCODE`: faad2 and libavcodec/libavutil
+  (found with pkg-config; `-DDVBDAB_TRANSCODE=OFF` builds without them)
 
 ### Compile
 
@@ -85,6 +102,10 @@ Or with pkg-config style flags:
 ```bash
 g++ -o myapp myapp.cpp -ldvbdab -lz -lpugixml
 ```
+
+The library is static: `dvbdab.pc` lists what it was built against, with
+transcoding also faad2 and libavcodec, so
+`pkg-config --cflags --libs dvbdab` gives all of it.
 
 ## Usage
 
