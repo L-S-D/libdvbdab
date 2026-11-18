@@ -30,10 +30,6 @@ void DABStreamParser::reset() {
     partial_af_count_ = 0;
 }
 
-uint16_t DABStreamParser::crc16(const uint8_t* data, size_t len) {
-    return crc16_ccitt_xor(data, len);
-}
-
 bool DABStreamParser::check_crc(const uint8_t* data, size_t len) {
     if (len < 2) return false;
 
@@ -486,7 +482,7 @@ bool DABStreamParser::assemble_eti_frame(bool partial, uint64_t invalid_scids, b
     eti[idx + 1] = edi_.m_mnsc & 0xFF;
 
     // EOH - CRC
-    uint16_t hdr_crc = crc16(&eti[4], idx - 4 + 2);
+    uint16_t hdr_crc = crc16_ccitt_xor(&eti[4], idx - 4 + 2);
     eti[idx + 2] = hdr_crc >> 8;
     eti[idx + 3] = hdr_crc & 0xFF;
     idx += 4;
@@ -504,7 +500,7 @@ bool DABStreamParser::assemble_eti_frame(bool partial, uint64_t invalid_scids, b
     }
 
     // EOF - CRC
-    uint16_t mst_crc = crc16(&eti[mst_start], idx - mst_start);
+    uint16_t mst_crc = crc16_ccitt_xor(&eti[mst_start], idx - mst_start);
     eti[idx] = mst_crc >> 8;
     eti[idx + 1] = mst_crc & 0xFF;
 

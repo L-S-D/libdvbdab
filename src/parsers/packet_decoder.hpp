@@ -124,7 +124,6 @@ private:
     void processDataGroup(uint16_t address, const uint8_t* data, size_t len);
 
     // CRC-16 for data groups
-    static uint16_t crc16(const uint8_t* data, size_t len);
 
     // Parse MOT header (data group type 3)
     void parseMotHeader(const uint8_t* data, size_t len);

@@ -19,10 +19,6 @@ void PacketDecoder::reset() {
     prbs_state_ = 0x1FF;  // Reset PRBS to all 1s
 }
 
-uint16_t PacketDecoder::crc16(const uint8_t* data, size_t len) {
-    return crc16_ccitt_xor(data, len);
-}
-
 // PRBS generator for energy dispersal (EN 300 401 section 14.2)
 // Polynomial: x^9 + x^5 + 1
 void prbs_descramble(uint8_t* output, const uint8_t* input, size_t len, uint16_t& prbs) {
@@ -77,7 +73,7 @@ void PacketDecoder::feedSubchannelData(const uint8_t* data, size_t len) {
         }
 
         // Verify CRC over entire packet minus CRC
-        uint16_t calc_crc = crc16(buf, pkt_len - 2);
+        uint16_t calc_crc = crc16_ccitt_xor(buf, pkt_len - 2);
         uint16_t recv_crc = (buf[pkt_len - 2] << 8) | buf[pkt_len - 1];
 
         if (CHECKSUMS_CHECKED && calc_crc != recv_crc) {
@@ -422,7 +418,7 @@ void PacketDecoder::processDataGroup(uint16_t address, const uint8_t* data, size
         payload_len -= 2;
 
         // CRC is calculated over header + data (excluding CRC itself)
-        uint16_t calc_crc = crc16(data, len - 2);
+        uint16_t calc_crc = crc16_ccitt_xor(data, len - 2);
         uint16_t recv_crc = (data[len - 2] << 8) | data[len - 1];
 
         if (CHECKSUMS_CHECKED && calc_crc != recv_crc) {

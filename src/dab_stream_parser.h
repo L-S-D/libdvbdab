@@ -154,7 +154,6 @@ private:
     // subchannels whose data did not come; fic_fresh, whether its FIC came
     bool assemble_eti_frame(bool partial, uint64_t invalid_scids, bool fic_fresh);
 
-    static uint16_t crc16(const uint8_t* data, size_t len);
     bool check_crc(const uint8_t* data, size_t len);
 
     uint32_t target_ip_;

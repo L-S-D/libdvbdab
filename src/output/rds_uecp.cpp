@@ -2,6 +2,7 @@
 
 #include "rds_uecp.hpp"
 #include "charsets.hpp"
+#include "../utils/crc_utils.hpp"
 
 namespace dvbdab {
 
@@ -11,18 +12,6 @@ constexpr uint8_t UECP_STA = 0xFE;   // start of a frame
 constexpr uint8_t UECP_STP = 0xFF;   // its end
 constexpr uint8_t UECP_STUFF = 0xFD; // FD, FE, FF inside a frame: FD 00, FD 01, FD 02
 constexpr uint8_t MEC_RT = 0x0A;     // RadioText
-
-// CRC of a UECP frame: CCITT (x^16 + x^12 + x^5 + 1), preset to ones, inverted,
-// over address, sequence counter, message field length and message field
-uint16_t crc16(const std::vector<uint8_t>& data) {
-    uint16_t crc = 0xFFFF;
-    for (uint8_t d : data) {
-        crc ^= static_cast<uint16_t>(d << 8);
-        for (int b = 0; b < 8; b++)
-            crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
-    }
-    return static_cast<uint16_t>(~crc);
-}
 
 } // namespace
 
@@ -47,7 +36,8 @@ std::vector<uint8_t> uecpRadioTextFrame(const std::string& rds_text, bool ab_fla
     msg.insert(msg.end(), rds_text.begin(), rds_text.end());
     body.push_back(static_cast<uint8_t>(msg.size()));
     body.insert(body.end(), msg.begin(), msg.end());
-    uint16_t crc = crc16(body);
+    // CCITT, preset to ones, inverted: over address, sequence counter, length and message
+    uint16_t crc = crc16_ccitt_xor(body.data(), body.size());
     body.push_back(static_cast<uint8_t>(crc >> 8));
     body.push_back(static_cast<uint8_t>(crc));
 

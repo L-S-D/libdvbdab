@@ -29,17 +29,6 @@ uint8_t continuation(uint8_t app_type) {
     }
 }
 
-// CRC of an X-PAD data group: CCITT (x^16 + x^12 + x^5 + 1), preset to ones, sent inverted
-uint16_t crc16(const uint8_t* data, size_t len) {
-    uint16_t crc = 0xFFFF;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= static_cast<uint16_t>(data[i] << 8);
-        for (int b = 0; b < 8; b++)
-            crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
-    }
-    return static_cast<uint16_t>(~crc);
-}
-
 } // namespace
 
 PadDecoder::PadDecoder() = default;
@@ -178,7 +167,7 @@ void PadDecoder::subfield(uint8_t app_type, const uint8_t* data, size_t len) {
     if (!dg_need_ || dg_.size() < dg_need_) return;
     dg_active_ = false;  // done; what follows in the subfield is padding
     uint16_t crc = static_cast<uint16_t>(dg_[dg_need_ - 2] << 8 | dg_[dg_need_ - 1]);
-    if (CHECKSUMS_CHECKED && crc16(dg_.data(), dg_need_ - 2) != crc) {
+    if (CHECKSUMS_CHECKED && crc16_ccitt_xor(dg_.data(), dg_need_ - 2) != crc) {
         crc_errors_++;
         return;
     }
