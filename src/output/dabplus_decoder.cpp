@@ -423,7 +423,8 @@ void DabPlusDecoder::processSuperframe() {
             aus_lost_++;
             continue;
         }
-        if (au_size[i] <= 0 || au_start[i] + au_size[i] < 2 ||
+        // (an AU is its two CRC bytes and at least one more)
+        if (au_size[i] < 3 || au_start[i] + au_size[i] < 2 ||
             static_cast<size_t>(au_start[i] + au_size[i]) > audio_super_frame_size) {
             if (superframe_count_ <= 3) {
                 LOG_TRACE(DABPLUS, "AU" << i << " skipped: size=" << au_size[i] << " start=" << au_start[i]);
