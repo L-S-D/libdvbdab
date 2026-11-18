@@ -24,6 +24,15 @@ static void appendDvbString(std::vector<uint8_t>& section, const std::string& te
     for (size_t i = 0; i < n; i++) section.push_back(static_cast<uint8_t>(text[i]));
 }
 
+/* The first bytes of a UTF-8 text, at most max_bytes and no character cut */
+static std::string utf8Prefix(const std::string& text, size_t max_bytes)
+{
+    if (text.size() <= max_bytes) return text;
+    size_t n = max_bytes;
+    while (n > 0 && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80) n--;
+    return text.substr(0, n);
+}
+
 std::vector<uint8_t> buildPatSection(uint16_t tsid, uint8_t version, const std::vector<TsService>& services) {
     std::vector<uint8_t> section;
     section.reserve(64);  // PAT: ~12 bytes header + 4 bytes/service + 4 bytes CRC
@@ -325,8 +334,8 @@ std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid,
         section.push_back(toBcd(dur_secs));
 
         // Prepare short_event_descriptor
-        std::string name = prog->name.substr(0, 120);
-        std::string desc = prog->description.substr(0, 120);
+        std::string name = utf8Prefix(prog->name, 120);
+        std::string desc = utf8Prefix(prog->description, 120);
 
         // descriptors_loop_length placeholder
         size_t desc_len_pos = section.size();

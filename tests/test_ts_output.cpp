@@ -279,6 +279,32 @@ int main() {
         check(c.bad_crc == 0 && c.cc_errors == 0, "and the TS is in order");
     }
     {
+        // a long title is cut between two characters, not inside one
+        DabStreamProcessor p;
+        Checker c;
+        p.setOutput([&](const uint8_t* d, size_t len) { c.feed(d, len); });
+        add_services(p, 1);
+        EpgSchedule sch = schedule(0x1000, now, 1, 1800);
+        sch.programmes[0].name = std::string(99, 'a');
+        for (int i = 0; i < 30; i++) sch.programmes[0].name += "\xC3\xA4";   // byte 120 is the second of an umlaut
+        sch.programmes[0].description = sch.programmes[0].name;
+        p.getMuxer().updateSchedule(0x1000, sch);
+        run(p, 1, 15);
+        bool whole = !c.event_texts[0x1000].empty();
+        for (const auto& t : c.event_texts[0x1000]) {
+            // short_event_descriptor: tag, length, language (3), then two texts of [length][0x15][UTF-8]
+            size_t at = 5;
+            for (int text = 0; text < 2 && at < t.size(); text++) {
+                size_t len = static_cast<uint8_t>(t[at]);
+                std::string body = t.substr(at + 2, len - 1);
+                if (body.size() != 119 || (static_cast<uint8_t>(body.back()) & 0xC0) != 0x80 ||
+                    static_cast<uint8_t>(body[body.size() - 2]) != 0xC3) whole = false;
+                at += 1 + len;
+            }
+        }
+        check(whole, "a title and a description of 159 bytes are cut to 119, after a whole character");
+    }
+    {
         // a programme with another title at the same start time replaces the old one
         DabStreamProcessor p;
         Checker c;
