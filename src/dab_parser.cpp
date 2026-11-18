@@ -332,8 +332,6 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
         charset = 0;
     }
 
-    fig_debug_count_++;
-
     LOG_DEBUG(FIC, "FIG: type=" << fig_type << " ext=" << ext << " pd=" << pd
              << " charset=" << charset
              << " len=" << fig_len << " hdr=0x" << std::hex << (int)fig[-1]
@@ -555,7 +553,6 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd, int
                 if (info.primary_subch >= 0) {
                     service_map_[sid] = info;
                     service_seen_[sid] = fic_frame_;
-                    fig02_count_++;
                     LOG_DEBUG(FIC, "FIG 0/2: Found service SID=0x" << std::hex << sid
                              << " subch=" << std::dec << info.primary_subch
                              << " total=" << service_map_.size());
@@ -747,8 +744,6 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext, int charset
                 label[end--] = 0;
             }
             service_labels_[sid] = dab_label_to_utf8(label, 16, charset);
-
-            fig11_count_++;
 
             auto now = std::chrono::steady_clock::now();
             int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time_).count();

@@ -197,10 +197,6 @@ private:
 
     int eti_call_count_ = 0;
     int fib_count_ = 0;
-    int fig_debug_count_ = 0;
-    int fig1_count_ = 0;
-    int fig02_count_ = 0;
-    int fig11_count_ = 0;
 
     void build_ensemble();
     void drop_stale();

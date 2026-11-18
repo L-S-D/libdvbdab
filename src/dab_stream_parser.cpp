@@ -245,7 +245,6 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::
     edi_.m_fc.nst = 0;
     est_mask_ = 0;
     est_bad_ = false;
-    int tag_count_local = 0;
 
     LOG_DEBUG(STREAM, "decode_tagpacket #" << tagpkt_count_ << " len=" << tagsize);
 
@@ -262,14 +261,6 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::
     for (size_t i = 0; i + 8 <= tagsize; ) {
         uint32_t tagId = read_be32(pkt + i);
         uint32_t taglen_bits = read_be32(pkt + i + 4);
-
-#if defined(LSDVB_LOG_DEBUG) || defined(LSDVB_LOG_TRACE)
-        if (tagpkt_count_ <= 5 && tag_count_local < 3) {
-            char id[5] = {(char)(tagId >> 24), (char)(tagId >> 16), (char)(tagId >> 8), (char)tagId, 0};
-            LOG_DEBUG(STREAM, "  TAG[" << tag_count_local << "]: id='" << id << "' (0x"
-                     << std::hex << tagId << ") len_bits=" << std::dec << taglen_bits);
-        }
-#endif
 
         if (taglen_bits % 8 != 0) break;
         uint32_t taglen = taglen_bits / 8;
@@ -290,7 +281,6 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::
         }
 
         i += 8 + taglen;
-        tag_count_local++;
         tag_count_++;
     }
 
