@@ -6,6 +6,7 @@
 #include "etina_pipeline.hpp"
 #include "logging.h"
 #include "dab_parser.h"
+#include "dab_tables.hpp"
 #include "output/dab_stream_processor.hpp"
 #include <algorithm>
 #include <cstring>
@@ -31,6 +32,21 @@ static void copy_label(char *dst, const std::string &src)
     }
     memcpy(dst, src.data(), n);
     dst[n] = '\0';
+}
+
+/* What the FIC says about a service and its ensemble into the C structures */
+static void copy_service_info(dvbdab_service_t &out, uint8_t language, uint8_t pty)
+{
+    snprintf(out.language, sizeof(out.language), "%s", dabLanguageIso639(language));
+    out.pty = pty;
+}
+
+static void copy_ensemble_info(dvbdab_ensemble_t &out, const DABEnsemble &ens)
+{
+    out.has_country = ens.has_country ? 1 : 0;
+    out.ecc = ens.ecc;
+    out.lto_half_hours = ens.lto_half_hours;
+    out.international_table = ens.international_table;
 }
 
 extern "C" {
@@ -141,6 +157,7 @@ dvbdab_results_t *dvbdab_scanner_get_results(dvbdab_scanner_t *scanner)
                     svc_out.bitrate = svc.bitrate;
                     svc_out.subchannel_id = svc.subchannel_id;
                     svc_out.dabplus = svc.dabplus ? 1 : 0;
+                    copy_service_info(svc_out, svc.language, svc.pty);
                 }
             }
         }
@@ -301,6 +318,7 @@ struct dvbdab_streamer {
 
     // DAB parsing - EnsembleManager for all formats (IPv4/ETI-NA/TSNI)
     std::unique_ptr<EnsembleManager> manager;
+    StreamKey stream_key{};   // the stream whose frames go out (set with its first frame)
 
     // Unified stream processor (audio + EPG + TS muxing)
     std::unique_ptr<DabStreamProcessor> processor;
@@ -339,6 +357,8 @@ static void add_missing_services(dvbdab_streamer* s, const DABEnsemble& ensemble
         cs.dabplus = svc.dabplus;
         cs.subchannel_id = svc.subchannel_id;
         cs.bitrate = svc.bitrate;
+        cs.language = dabLanguageIso639(svc.language);
+        cs.content = dabPtyToDvbContent(svc.pty, ensemble.international_table);
         // Estimate sample rate based on codec and bitrate
         // DAB (MP2) at low bitrates typically uses 24kHz (MPEG-2 Layer II)
         // DAB+ (AAC) typically uses 48kHz or 32kHz
@@ -404,6 +424,8 @@ static void sync_processor_services(dvbdab_streamer* s, const DABEnsemble& ensem
     s->processor->setEnsemble(eid, ensemble.label, ensemble.label);
     for (const auto& svc : ensemble.services) {
         s->processor->updateServiceLabel(static_cast<uint16_t>(svc.sid), svc.label);
+        s->processor->updateServiceInfo(static_cast<uint16_t>(svc.sid), dabLanguageIso639(svc.language),
+                                        dabPtyToDvbContent(svc.pty, ensemble.international_table));
     }
 
     for (uint8_t subch : restart) s->processor->startService(subch);
@@ -420,9 +442,13 @@ static void auto_start_services_if_ready(dvbdab_streamer* s) {
 // Shared ETI frame processing - used by all input formats (ETI-NA, IPv4, TSNI)
 // All formats produce ETI frames that are processed identically here
 // Called via eti_callback from EnsembleManager
-static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t len,
+static void process_eti_frame(dvbdab_streamer* s, const StreamKey& key, const uint8_t* eti_ni, size_t len,
                               uint64_t invalid_scids) {
     if (!s->processor_initialized || !s->processor) return;
+    // the time of the ensemble, for the TDT
+    int64_t utc_ms;
+    s->stream_key = key;
+    if (s->manager && s->manager->getUtc(key, utc_ms)) s->processor->setUtc(utc_ms);
     // Feed to unified processor - handles audio + EPG + TS muxing; the
     // subchannels in invalid_scids did not come in this frame
     s->processor->feedEtiFrame(eti_ni, len, invalid_scids);
@@ -441,6 +467,19 @@ unsigned int dvbdab_version(void)
 const char *dvbdab_version_string(void)
 {
     return DVBDAB_STR(DVBDAB_VERSION_MAJOR) "." DVBDAB_STR(DVBDAB_VERSION_MINOR) "." DVBDAB_STR(DVBDAB_VERSION_PATCH);
+}
+
+int dvbdab_streamer_get_time(dvbdab_streamer_t *streamer, int64_t *utc_ms)
+{
+    if (!streamer || !utc_ms || !streamer->manager) return 0;
+    try {
+        int64_t ms;
+        if (!streamer->manager->getUtc(streamer->stream_key, ms)) return 0;
+        *utc_ms = ms;
+        return 1;
+    } catch (...) {
+        return 0;
+    }
 }
 
 int dvbdab_aac_transcode(void)
@@ -500,7 +539,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
                                           uint64_t invalid_scids) {
                 if (key.ip != static_cast<uint32_t>(s->config.pid) || key.port != 0) return;
-                process_eti_frame(s, data, len, invalid_scids);
+                process_eti_frame(s, key, data, len, invalid_scids);
             });
             break;
 
@@ -550,7 +589,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
                                           uint64_t invalid_scids) {
                 if (key.ip != s->config.filter_ip || key.port != s->config.filter_port) return;
-                process_eti_frame(s, data, len, invalid_scids);
+                process_eti_frame(s, key, data, len, invalid_scids);
             });
             break;
 
@@ -591,7 +630,7 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
                                           uint64_t invalid_scids) {
                 if (key.ip != static_cast<uint32_t>(s->config.pid) || key.port != 0) return;
-                process_eti_frame(s, data, len, invalid_scids);
+                process_eti_frame(s, key, data, len, invalid_scids);
             });
             break;
 
@@ -782,6 +821,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
     result->source_pid = streamer->config.pid;
     result->service_count = static_cast<int>(ens.services.size());
     result->is_etina = (streamer->config.format == DVBDAB_FORMAT_ETI_NA) ? 1 : 0;
+    copy_ensemble_info(*result, ens);
     result->is_gse = 0;  /* the caller knows (IPv4 from GSE or MPE) */
 
     if (result->service_count > 0) {
@@ -801,6 +841,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_ensemble(dvbdab_streamer_t *streamer)
             out.bitrate = svc.bitrate;
             out.subchannel_id = svc.subchannel_id;
             out.dabplus = svc.dabplus ? 1 : 0;
+            copy_service_info(out, svc.language, svc.pty);
         }
     }
 
@@ -853,6 +894,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
         out.service_count = static_cast<int>(ens.services.size());
         out.is_gse = 0;               /* the caller knows (IPv4 from GSE or MPE) */
         out.is_etina = 0;
+        copy_ensemble_info(out, ens);
 
         if (out.service_count > 0) {
             out.services = static_cast<dvbdab_service_t*>(
@@ -871,6 +913,7 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
                 svc_out.bitrate = svc.bitrate;
                 svc_out.subchannel_id = svc.subchannel_id;
                 svc_out.dabplus = svc.dabplus ? 1 : 0;
+                copy_service_info(svc_out, svc.language, svc.pty);
             }
         }
     }

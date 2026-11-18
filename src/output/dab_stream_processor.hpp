@@ -76,6 +76,9 @@ public:
 
     // Update service label
     void updateServiceLabel(uint16_t sid, const std::string& name);
+    void updateServiceInfo(uint16_t sid, const std::string& language, uint8_t content);
+    /// The time of the ensemble as of the frame that is fed next (UTC, ms since 1970)
+    void setUtc(int64_t utc_ms) { muxer_.setUtc(utc_ms); }
 
     // Get muxer for direct access if needed
     TsMuxer& getMuxer() { return muxer_; }

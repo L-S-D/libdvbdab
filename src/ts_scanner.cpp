@@ -95,6 +95,8 @@ struct TsScanner::Impl {
             ds.bitrate = svc.bitrate;
             ds.subchannel_id = static_cast<uint8_t>(svc.subchannel_id);
             ds.dabplus = svc.dabplus;
+            ds.language = svc.language;
+            ds.pty = svc.pty;
             de.services.push_back(ds);
         }
         return de;
@@ -117,6 +119,8 @@ struct TsScanner::Impl {
             ds.bitrate = svc.bitrate;
             ds.subchannel_id = static_cast<uint8_t>(svc.subchannel_id);
             ds.dabplus = svc.dabplus;
+            ds.language = svc.language;
+            ds.pty = svc.pty;
             de.services.push_back(ds);
         }
         return de;

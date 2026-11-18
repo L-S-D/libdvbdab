@@ -279,6 +279,16 @@ void DabStreamProcessor::updateServiceLabel(uint16_t sid, const std::string& nam
     muxer_.updateServiceLabel(sid, name);
 }
 
+void DabStreamProcessor::updateServiceInfo(uint16_t sid, const std::string& language, uint8_t content) {
+    for (auto& s : services_) {
+        if (s.sid == sid) {
+            s.language = language;
+            s.content = content;
+        }
+    }
+    muxer_.updateServiceInfo(sid, language, content);
+}
+
 void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len) {
     feedEtiFrame(eti_ni, len, 0);
 }

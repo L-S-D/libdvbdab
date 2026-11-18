@@ -26,6 +26,19 @@ TS output
 - EIT: a title or description longer than 120 bytes is cut after a whole
   UTF-8 character (it could end in half of one).
 
+Service information
+- The FIC is read for the language of each service (FIG 0/5), its
+  programme type (FIG 0/17), country, local time offset and international
+  table of the ensemble (FIG 0/9) and date and time (FIG 0/10).
+- C API (`DVBDAB_HAVE_SERVICE_INFO`): `language` and `pty` in
+  `dvbdab_service_t`; `has_country`, `ecc`, `lto_half_hours` and
+  `international_table` in `dvbdab_ensemble_t`;
+  `dvbdab_streamer_get_time()`.
+- TS: the PMT has the language of the audio. EIT events are in the language
+  of the service - "und" when the ensemble does not say it, where every
+  event said "ger" before - and have the programme type as their content
+  descriptor. A TDT (PID 0x14) with the time of the ensemble every 5 s.
+
 C API
 - `dvbdab_version()`, `dvbdab_version_string()`, `DVBDAB_VERSION_PATCH`.
 - Labels in `dvbdab_service_t` and `dvbdab_ensemble_t` have

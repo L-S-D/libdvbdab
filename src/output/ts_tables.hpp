@@ -26,6 +26,7 @@ inline constexpr size_t TS_MUXER_PACKET_SIZE = 188;  ///< TS packet size in byte
 inline constexpr uint16_t PID_PAT = 0x0000;          ///< PAT always on PID 0
 inline constexpr uint16_t PID_SDT = 0x0011;          ///< SDT/BAT PID
 inline constexpr uint16_t PID_EIT = 0x0012;          ///< EIT PID
+inline constexpr uint16_t PID_TDT = 0x0014;          ///< TDT/TOT PID
 inline constexpr uint16_t PID_NULL = 0x1FFF;         ///< Null packet PID
 /// @}
 
@@ -54,12 +55,15 @@ struct TsService {
     uint8_t subchannel_id;  ///< DAB subchannel ID (for feedAudioFrame lookup)
     int sample_rate{48000}; ///< Audio sample rate in Hz
     int bitrate{0};         ///< Audio bitrate in kbps
+    std::string language;   ///< Language of the audio, ISO 639-2 (three letters); empty = not known
+    uint8_t content{0};     ///< What it broadcasts, as the nibbles of a DVB content_descriptor; 0 = not known
 };
 
 /// The PAT: every service with the PID of its PMT
 std::vector<uint8_t> buildPatSection(uint16_t tsid, uint8_t version, const std::vector<TsService>& services);
 
-/// The PMT of a service: its audio (which carries the PCR) and, with an rds_pid, its RadioText
+/// The PMT of a service: its audio (which carries the PCR; with the
+/// language of the service, when that is known) and, with an rds_pid, its RadioText
 std::vector<uint8_t> buildPmtSection(const TsService& service, uint8_t version);
 
 /// The SDT (actual), in as many sections of at most 1024 bytes as the
@@ -69,9 +73,16 @@ std::vector<std::vector<uint8_t>> buildSdtSections(uint16_t tsid, uint16_t onid,
                                                    const std::string& default_provider);
 
 /// The EIT schedule (table 0x50) of one service with these programmes, in
-/// sections of at most 4096 bytes; none without programmes
+/// sections of at most 4096 bytes; none without programmes. The texts are
+/// in `language` (ISO 639-2; "und" when empty), and every event has
+/// `content` as its content_descriptor when that is not 0.
 std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, uint16_t tsid, uint16_t onid,
                                                            uint8_t version,
-                                                           const std::vector<EpgProgramme>& programmes);
+                                                           const std::vector<EpgProgramme>& programmes,
+                                                           const std::string& language = "",
+                                                           uint8_t content = 0);
+
+/// The TDT: UTC, in seconds since 1970
+std::vector<uint8_t> buildTdtSection(int64_t utc_seconds);
 
 } // namespace dvbdab

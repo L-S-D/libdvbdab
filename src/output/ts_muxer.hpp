@@ -162,6 +162,25 @@ public:
      */
     void updateServiceLabel(uint16_t sid, const std::string& name);
 
+    /**
+     * @brief What the ensemble says about a service: language and content
+     * @param sid      Service ID
+     * @param language ISO 639-2 code of its audio; empty = not known
+     * @param content  DVB content nibbles; 0 = not known
+     *
+     * A change gets into the PMT and the EIT with a new version.
+     */
+    void updateServiceInfo(uint16_t sid, const std::string& language, uint8_t content);
+
+    /**
+     * @brief The time of the ensemble (FIG 0/10), UTC in ms since 1970
+     *
+     * Call it with the time of the frame that is fed. With it the TS has a
+     * TDT; without, none (the clock of the host is not the one of a
+     * recording).
+     */
+    void setUtc(int64_t utc_ms) { utc_ms_ = utc_ms; }
+
     /// Update service label by subchannel ID (legacy compatibility)
     void updateServiceLabelBySubch(uint8_t subchannel_id, const std::string& name);
 
@@ -259,6 +278,11 @@ private:
     bool eit_carousel_pending_{false};  // True when there are pending changes to apply
     static constexpr int64_t EIT_INTERVAL_PTS = 10 * 90000;  // the whole schedule every 10 s
     int64_t last_eit_pts_{-1};
+
+    // TDT: the time of the ensemble, when it sends one
+    static constexpr int64_t TDT_INTERVAL_PTS = 5 * 90000;
+    int64_t utc_ms_{-1};
+    int64_t last_tdt_pts_{-1};
     static constexpr size_t MAX_SCHEDULES = 256;         // services with a schedule
     static constexpr size_t MAX_PROGRAMMES = 1024;       // of one service
     static constexpr time_t SCHEDULE_PAST_SECONDS = 6 * 3600;  // kept after its end

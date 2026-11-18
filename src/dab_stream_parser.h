@@ -110,6 +110,9 @@ public:
     /// Goes up with every change of the ensemble (see DABParser::revision())
     uint32_t ensemble_revision() const;
 
+    /// The time of the ensemble (FIG 0/10) as of the last frame, UTC in ms since 1970
+    bool utc_now(int64_t& utc_ms) const { return fic_parser_.utc_now(utc_ms); }
+
     /// ETI frames made so far
     int64_t eti_frame_count() const { return static_cast<int64_t>(eti_count_); }
 

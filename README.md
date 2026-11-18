@@ -54,9 +54,21 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
   (`DVBDAB_FORMAT_IPV4`). Up to 1.x the formats `DVBDAB_FORMAT_MPE`, `_GSE`
   and `_BBF_TS` did it in the library; their numbers 1-3 stay unused.
 
+- **Service information from the FIC**
+  - Language of each service (FIG 0/5), programme type (FIG 0/17), country,
+    local time offset and international table (FIG 0/9), date and time
+    (FIG 0/10): in the structures of the API
+    (`dvbdab_streamer_get_time()` for the time) and in the TS
+
 - **MPEG-TS Output**
   - Custom TS muxer (no FFmpeg dependency)
-  - DVB SI: PAT, PMT, SDT, EIT schedule (from EHB/SPI)
+  - DVB SI: PAT, PMT, SDT, EIT schedule (from EHB), TDT
+  - The PMT has the language of the audio (ISO 639-2) when the ensemble
+    says it. EIT events are in that language ("und" without) and carry the
+    programme type of the service as their content (genre; the RDS types of
+    the international table 1, put into the DVB content codes).
+  - The TDT has the time of the ensemble, not the clock of the host: none
+    when the ensemble sends no time.
   - Deterministic PID allocation based on subchannel ID: PMT 0x100, audio
     0x1000, RDS 0x1100 (each + subchannel ID)
   - The dynamic label of each service as RDS RadioText, as DVB radio carries
@@ -252,6 +264,7 @@ asked at compile time:
 | `DVBDAB_HAVE_WANTED_PIDS` | 2.2.0 | `dvbdab_streamer_set_wanted_pids()` |
 | `DVBDAB_HAVE_RDS` | 2.3.0 | dynamic labels as RDS RadioText in the TS |
 | `DVBDAB_LABEL_SIZE` | 2.5.0 | labels of 65 bytes (17 before), `dvbdab_version()` |
+| `DVBDAB_HAVE_SERVICE_INFO` | 2.5.0 | language and programme type of a service, country and LTO of the ensemble, `dvbdab_streamer_get_time()` |
 
 [CHANGELOG.md](CHANGELOG.md) has what each version changed.
 
@@ -375,6 +388,7 @@ Deterministic PID allocation based on subchannel_id:
 - RDS PID (the dynamic label as RadioText): `0x1100 + subchannel_id`
 - SDT PID: `0x0011` (standard)
 - EIT PID: `0x0012` (standard)
+- TDT PID: `0x0014` (standard)
 
 ## Log Levels
 

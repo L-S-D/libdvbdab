@@ -19,6 +19,8 @@ struct DABService {
     bool dabplus{false};        // true for DAB+, false for DAB
     int protection_level{0};    // Protection level
     bool eep_protection{false}; // EEP (true) or UEP (false)
+    uint8_t language{0};        // Language of its audio (FIG 0/5, TS 101 756 tables 9/10), 0 = not said
+    uint8_t pty{0};             // Programme type (FIG 0/17, international code), 0 = none
 };
 
 // DAB Ensemble Information
@@ -30,6 +32,12 @@ struct DABEnsemble {
     // Stream identification (where this ensemble comes from)
     uint32_t source_ip{0};      // Multicast IP (e.g., 239.199.2.1)
     uint16_t source_port{0};    // UDP port (e.g., 1234)
+
+    // Country, LTO and international table (FIG 0/9)
+    bool has_country{false};    // FIG 0/9 was received
+    uint8_t ecc{0};             // Extended country code
+    int8_t lto_half_hours{0};   // Local time offset from UTC, in half hours
+    uint8_t international_table{0};  // 1: RDS programme types, 2: RBDS
 };
 
 // Stream key for routing packets to per-ensemble parsers
@@ -115,6 +123,8 @@ struct DiscoveredService {
     int bitrate{0};              // Bitrate in kbps
     uint8_t subchannel_id{0};    // Subchannel ID
     bool dabplus{false};         // true for DAB+, false for DAB
+    uint8_t language{0};         // Language (FIG 0/5 code), 0 = not said
+    uint8_t pty{0};              // Programme type (FIG 0/17), 0 = none
 };
 
 // ETI-NA detection info (for ETI-NA ensembles)

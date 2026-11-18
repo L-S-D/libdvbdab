@@ -6,6 +6,7 @@
 
 #include "../src/output/dab_stream_processor.hpp"
 #include "../src/utils/crc_utils.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -350,6 +351,64 @@ int main() {
         p.getMuxer().updateSchedule(0x1000, schedule(0x1000, 1500000000, 20, 1800));
         run(p, 1, 30);
         check(c.events[0x1000].size() == 20, "the guide of an old recording stays");
+    }
+
+    {
+        // what the ensemble says about a service, in the sections
+        auto has = [](const std::vector<uint8_t>& in, std::initializer_list<uint8_t> what) {
+            return std::search(in.begin(), in.end(), what.begin(), what.end()) != in.end();
+        };
+        TsService svc{};
+        svc.sid = 0x1000;
+        svc.pmt_pid = 0x100;
+        svc.audio_pid = 0x1000;
+        svc.dabplus = true;
+        std::vector<uint8_t> plain = buildPmtSection(svc, 3);
+        svc.language = "nor";
+        std::vector<uint8_t> with = buildPmtSection(svc, 3);
+        check(with.size() == plain.size() + 6 && has(with, {0xF0, 0x06, 0x0A, 0x04, 'n', 'o', 'r', 0x00}) &&
+                  !has(plain, {0x0A, 0x04}) && dvb_crc32(with.data(), with.size()) == 0 &&
+                  (((with[1] & 0x0F) << 8) | with[2]) == static_cast<int>(with.size()) - 3,
+              "the PMT has the language of the audio when the ensemble says it, and only then");
+
+        EpgSchedule sch = schedule(0x1000, 1795000000, 3, 1800);
+        auto und = buildEitScheduleSections(0x1000, 1, 1, 0, sch.programmes);
+        auto nor = buildEitScheduleSections(0x1000, 1, 1, 0, sch.programmes, "nor", 0x62);
+        check(und.size() == 1 && nor.size() == 1 && has(und[0], {0x4D}) && has(und[0], {'u', 'n', 'd'}) &&
+                  !has(und[0], {0x54, 0x02}) && has(nor[0], {'n', 'o', 'r'}) && !has(nor[0], {'u', 'n', 'd'}) &&
+                  has(nor[0], {0x54, 0x02, 0x62, 0x00}) && nor[0].size() == und[0].size() + 3 * 4 &&
+                  dvb_crc32(nor[0].data(), nor[0].size()) == 0,
+              "EIT events are in the language of the service and have its content; 'und' and none without");
+
+        // 2026-11-18 11:06:40 UTC is MJD 61362 (0xEFB2)
+        check(buildTdtSection(1795000000) == std::vector<uint8_t>({0x70, 0x70, 0x05, 0xEF, 0xB2, 0x11, 0x06, 0x40}),
+              "the TDT of a time");
+    }
+    {
+        // a TDT only when the ensemble sends a time; language and content that come later get into PMT and EIT
+        for (bool with_time : {false, true}) {
+            DabStreamProcessor p;
+            std::vector<uint8_t> ts;
+            p.setOutput([&](const uint8_t* d, size_t len) { ts.insert(ts.end(), d, d + len); });
+            add_services(p, 1);
+            p.getMuxer().updateSchedule(0x1000, schedule(0x1000, now, 5, 1800));
+            if (with_time) p.setUtc(1795000000123);
+            run(p, 1, 12);
+            size_t tdt = 0, cut = ts.size();
+            for (size_t i = 0; i + 188 <= ts.size(); i += 188)
+                if ((((ts[i + 1] & 0x1F) << 8) | ts[i + 2]) == 0x14) tdt++;
+            check(with_time ? tdt >= 2 && tdt <= 4 : tdt == 0,
+                  with_time ? "a TDT every 5 s with the time of the ensemble" : "no TDT without a time from the ensemble");
+            if (!with_time) continue;
+            p.updateServiceInfo(0x1000, "ger", 0x61);
+            run(p, 1, 12);
+            const uint8_t lang[] = {0x0A, 0x04, 'g', 'e', 'r'}, content[] = {0x54, 0x02, 0x61, 0x00};
+            bool before = std::search(ts.begin(), ts.begin() + static_cast<std::ptrdiff_t>(cut), lang, lang + 5) !=
+                          ts.begin() + static_cast<std::ptrdiff_t>(cut);
+            bool pmt = std::search(ts.begin() + static_cast<std::ptrdiff_t>(cut), ts.end(), lang, lang + 5) != ts.end();
+            bool eit = std::search(ts.begin() + static_cast<std::ptrdiff_t>(cut), ts.end(), content, content + 4) != ts.end();
+            check(!before && pmt && eit, "language and content that come while the stream runs are in PMT and EIT");
+        }
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);

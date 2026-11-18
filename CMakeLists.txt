@@ -72,6 +72,7 @@ add_library(dvbdab STATIC
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/dab_tables.cpp
     src/dab_stream_parser.cpp
     src/discover.cpp
     src/logging.cpp
@@ -155,6 +156,7 @@ add_executable(test_ensemble_discovery
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/dab_tables.cpp
     src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
@@ -167,6 +169,7 @@ add_executable(test_ip_checks
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/dab_tables.cpp
     src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
@@ -196,6 +199,7 @@ add_executable(test_stream_processor
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/dab_tables.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
 )
@@ -209,6 +213,7 @@ add_executable(test_packet_mode
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/dab_tables.cpp
     src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp

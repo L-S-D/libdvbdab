@@ -66,6 +66,21 @@ void TsMuxer::updateServiceLabel(uint16_t sid, const std::string& name) {
     }
 }
 
+void TsMuxer::updateServiceInfo(uint16_t sid, const std::string& language, uint8_t content) {
+    auto it = sid_to_index_.find(sid);
+    if (it == sid_to_index_.end()) return;
+    TsService& s = services_[it->second];
+    if (s.language == language && s.content == content) return;
+    if (s.language != language) pmt_version_ = (pmt_version_ + 1) & 0x1F;
+    s.language = language;
+    s.content = content;
+    // its events say both
+    if (service_schedules_.count(sid)) {
+        schedule_changed_[sid] = true;
+        eit_carousel_pending_ = true;
+    }
+}
+
 void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
     std::string rds = rdsRadioText(text);
     auto& rt = radio_text_[sid];
@@ -267,9 +282,10 @@ void TsMuxer::outputEitScheduleCarousel() {
     // This ensures decoders see complete table before any version change
     for (const auto& [service_id, schedule] : service_schedules_) {
         if (schedule.programmes.empty() || !sid_to_index_.count(service_id)) continue;
+        const TsService& svc = services_[sid_to_index_[service_id]];
         for (const auto& section : buildEitScheduleSections(service_id, tsid_, onid_,
                                                             eit_schedule_version_[service_id],
-                                                            schedule.programmes)) {
+                                                            schedule.programmes, svc.language, svc.content)) {
             outputSection(PID_EIT, section);
         }
     }
@@ -467,6 +483,12 @@ void TsMuxer::tick(int64_t pts) {
                 outputSdt();
             }
         }
+    }
+
+    // The time of the ensemble, as long as it sends one
+    if (utc_ms_ >= 0 && pts > last_tdt_pts_ && (last_tdt_pts_ < 0 || pts - last_tdt_pts_ >= TDT_INTERVAL_PTS)) {
+        last_tdt_pts_ = pts;
+        outputSection(PID_TDT, buildTdtSection(utc_ms_ / 1000));
     }
 
     // EIT schedule carousel - output complete table periodically: by the

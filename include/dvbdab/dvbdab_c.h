@@ -58,6 +58,9 @@ typedef struct {
     int bitrate;            /* Bitrate in kbps */
     int subchannel_id;      /* Sub-channel ID */
     int dabplus;            /* 1 for DAB+, 0 for DAB */
+    /* DVBDAB_HAVE_SERVICE_INFO (2.5.0 on) */
+    char language[4];       /* Language of its audio (FIG 0/5), ISO 639-2; "" = not said */
+    uint8_t pty;            /* Programme type (FIG 0/17, international code); 0 = none */
 } dvbdab_service_t;
 
 /* DAB ensemble info (C struct) */
@@ -78,6 +81,12 @@ typedef struct {
     int etina_padding;      /* ETI-NA: leading 0xFF bytes */
     int etina_bit_offset;   /* ETI-NA: bit position of E1 sync */
     int etina_inverted;     /* ETI-NA: signal is inverted */
+    /* Country, LTO and international table of the ensemble (FIG 0/9),
+     * DVBDAB_HAVE_SERVICE_INFO (2.5.0 on); from a streamer, 0 from a scanner */
+    uint8_t has_country;    /* 1 when FIG 0/9 was received */
+    uint8_t ecc;            /* Extended country code */
+    int8_t lto_half_hours;  /* Local time offset from UTC, in half hours */
+    uint8_t international_table; /* 1: the programme types of RDS, 2: of RBDS */
 } dvbdab_ensemble_t;
 
 /* ETI-NA detection info */
@@ -194,6 +203,10 @@ typedef enum {
  * 0x89, UECP; PID 0x1100 + subchannel ID) (2.3.0 on) */
 #define DVBDAB_HAVE_RDS 1
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
+/* language and programme type of the services, country and LTO of the
+ * ensemble, dvbdab_streamer_get_time(); the TS has the language in the PMT,
+ * language and content in the EIT, and a TDT (2.5.0 on) */
+#define DVBDAB_HAVE_SERVICE_INFO 1
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
  * subchannels of EDI packets with lost fragments (2.1.0 on); the DAB+ output
@@ -328,6 +341,15 @@ dvbdab_ensemble_t *dvbdab_streamer_get_all_ensembles(dvbdab_streamer_t *streamer
  * @param count     Number of ensembles in array
  */
 void dvbdab_streamer_free_all_ensembles(dvbdab_ensemble_t *ensembles, int count);
+
+/**
+ * The date and time the ensemble sends (FIG 0/10), as of the last frame
+ * that was fed (DVBDAB_HAVE_SERVICE_INFO).
+ * @param streamer Streamer handle
+ * @param utc_ms   Output: UTC in milliseconds since 1970-01-01
+ * @return         1 if the ensemble sent a time, 0 if not (yet)
+ */
+int dvbdab_streamer_get_time(dvbdab_streamer_t *streamer, int64_t *utc_ms);
 
 /**
  * Start streaming a specific service (by subchannel ID).

@@ -94,6 +94,16 @@ void DABParser::reset() {
     first_service_frame_ = -1;
     service_seen_.clear();
     subch_seen_.clear();
+    subch_language_.clear();
+    pty_static_.clear();
+    pty_dynamic_.clear();
+    has_country_ = false;
+    ecc_ = 0;
+    lto_half_hours_ = 0;
+    international_table_ = 0;
+    utc_ms_ = 0;
+    utc_frame_ = -1;
+    utc_long_ = false;
 }
 
 bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
@@ -219,6 +229,8 @@ void DABParser::drop_stale() {
         if (seen != service_seen_.end() && fic_frame_ - seen->second > STALE_FRAMES) {
             LOG_DEBUG(FIC, "service 0x" << std::hex << it->first << std::dec << " is gone");
             service_labels_.erase(it->first);
+            pty_static_.erase(it->first);
+            pty_dynamic_.erase(it->first);
             service_seen_.erase(seen);
             it = service_map_.erase(it);
         } else {
@@ -229,6 +241,7 @@ void DABParser::drop_stale() {
         auto seen = subch_seen_.find(it->first);
         if (seen != subch_seen_.end() && fic_frame_ - seen->second > STALE_FRAMES) {
             subch_seen_.erase(seen);
+            subch_language_.erase(it->first);
             it = subchannels_.erase(it);
         } else {
             ++it;
@@ -296,11 +309,12 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
     int fig_type = (fig[-1] >> 5) & 0x07;
 
     // FIG type 0 and 1 have different first data byte structures
-    int ext, pd, charset;
+    int ext, pd, charset, oe = 0;
     if (fig_type == 0) {
         // FIG 0: ext in bits 0-4, pd in bit 5, OE in bit 6, C/N in bit 7
         ext = fig[0] & 0x1F;
         pd = (fig[0] >> 5) & 0x01;
+        oe = (fig[0] >> 6) & 0x01;
         charset = 0;
         // C/N = 1 in the FIGs of the multiplex configuration: the next
         // configuration, sent for six seconds before a reconfiguration. It
@@ -327,7 +341,7 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
 
     switch (fig_type) {
         case 0:
-            process_fig_0(fig + 1, fig_len - 1, ext, pd);
+            process_fig_0(fig + 1, fig_len - 1, ext, pd, oe);
             break;
         case 1:
             process_fig_1(fig + 1, fig_len - 1, ext, charset);
@@ -335,8 +349,78 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
     }
 }
 
-void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
+void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd, int oe) {
     switch (ext) {
+        case 5: {
+            // FIG 0/5 - Service component language
+            int pos = 0;
+            while (pos < len) {
+                if (data[pos] & 0x80) {
+                    // long form (a component by its SCId): not what a
+                    // programme service has its audio in
+                    pos += 3;
+                } else {
+                    if (pos + 2 > len) break;
+                    if (!(data[pos] & 0x40)) {   // in the MSC, in stream mode
+                        subch_language_[data[pos] & 0x3F] = data[pos + 1];
+                    }
+                    pos += 2;
+                }
+            }
+            break;
+        }
+
+        case 9: {
+            // FIG 0/9 - Country, LTO and International table
+            if (len < 3) return;
+            has_country_ = true;
+            lto_half_hours_ = static_cast<int8_t>((data[0] & 0x20 ? -1 : 1) * (data[0] & 0x1F));
+            ecc_ = data[1];
+            international_table_ = data[2];
+            break;
+        }
+
+        case 10: {
+            // FIG 0/10 - Date and time: MJD (17 bits), LSI, UTC flag, then
+            // hours and minutes (short form), or with seconds and
+            // milliseconds (long form)
+            if (len < 4) return;
+            bool long_form = data[2] & 0x08;
+            if (long_form && len < 6) return;
+            if (!long_form && utc_long_) return;   // the long form is the better one
+            int64_t mjd = (data[0] & 0x7F) << 10 | data[1] << 2 | data[2] >> 6;
+            int hours = (data[2] & 0x07) << 2 | data[3] >> 6;
+            int minutes = data[3] & 0x3F;
+            int seconds = long_form ? data[4] >> 2 : 0;
+            int ms = long_form ? (data[4] & 0x03) << 8 | data[5] : 0;
+            // 51544 is 2000-01-01; a seconds field of 60 is a leap second
+            if (mjd < 51544 || hours > 23 || minutes > 59 || seconds > 60 || ms > 999) return;
+            utc_ms_ = ((mjd - 40587) * 86400 + hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
+            utc_frame_ = fic_frame_;
+            utc_long_ = long_form;
+            break;
+        }
+
+        case 17: {
+            // FIG 0/17 - Programme Type (of the services of this ensemble)
+            if (pd || oe) return;
+            int pos = 0;
+            while (pos + 4 <= len) {
+                uint32_t sid = (data[pos] << 8) | data[pos + 1];
+                bool dynamic = data[pos + 2] & 0x80;
+                bool with_language = data[pos + 2] & 0x20;
+                bool with_coarse_code = data[pos + 2] & 0x10;
+                pos += 3;
+                if (with_language) pos++;
+                if (pos >= len) break;
+                uint8_t pty = data[pos] & 0x1F;
+                pos++;
+                if (with_coarse_code) pos++;
+                (dynamic ? pty_dynamic_ : pty_static_)[sid] = pty;
+            }
+            break;
+        }
+
         case 0: {
             // FIG 0/0 - Ensemble Information
             if (len < 4) return;
@@ -684,6 +768,10 @@ void DABParser::build_ensemble() {
     e.label = ensemble_label_;
     e.source_ip = ensemble_.source_ip;
     e.source_port = ensemble_.source_port;
+    e.has_country = has_country_;
+    e.ecc = ecc_;
+    e.lto_half_hours = lto_half_hours_;
+    e.international_table = international_table_;
 
     for (const auto& [sid, info] : service_map_) {
         if (info.primary_subch < 0) continue;
@@ -704,6 +792,13 @@ void DABParser::build_ensemble() {
         svc.dabplus = (sc.dabplus == 1);
         svc.protection_level = sc.protlvl;
         svc.eep_protection = (sc.eepprot == 1);
+        auto lang = subch_language_.find(sc.subchid);
+        if (lang != subch_language_.end()) svc.language = lang->second;
+        // what the service is (static) before what is on right now (dynamic)
+        if (auto st = pty_static_.find(sid); st != pty_static_.end()) svc.pty = st->second;
+        if (svc.pty == 0) {
+            if (auto dy = pty_dynamic_.find(sid); dy != pty_dynamic_.end()) svc.pty = dy->second;
+        }
 
         e.services.push_back(svc);
     }
@@ -715,9 +810,13 @@ void DABParser::build_ensemble() {
     // subchannel lies): the revision goes up
     auto same = [](const DABService& a, const DABService& b) {
         return a.sid == b.sid && a.label == b.label && a.bitrate == b.bitrate &&
-               a.subchannel_id == b.subchannel_id && a.dabplus == b.dabplus;
+               a.subchannel_id == b.subchannel_id && a.dabplus == b.dabplus &&
+               a.language == b.language && a.pty == b.pty;
     };
     bool changed = e.eid != ensemble_.eid || e.label != ensemble_.label ||
+                   e.has_country != ensemble_.has_country || e.ecc != ensemble_.ecc ||
+                   e.lto_half_hours != ensemble_.lto_half_hours ||
+                   e.international_table != ensemble_.international_table ||
                    e.services.size() != ensemble_.services.size() ||
                    !std::equal(e.services.begin(), e.services.end(), ensemble_.services.begin(), same);
     ensemble_ = std::move(e);

@@ -92,6 +92,10 @@ public:
     // Get count of total streams seen
     size_t getStreamCount() const { return parsers_.size(); }
 
+    /// The time the ensemble of a stream sends (FIG 0/10), as of its last
+    /// frame: UTC in ms since 1970. false when it sent none.
+    bool getUtc(const StreamKey& key, int64_t& utc_ms) const;
+
     // Reset all state
     void reset();
 

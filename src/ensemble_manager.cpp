@@ -118,6 +118,16 @@ void EnsembleManager::processUdp(uint32_t dst_ip, uint16_t dst_port, const uint8
     }
 }
 
+bool EnsembleManager::getUtc(const StreamKey& key, int64_t& utc_ms) const {
+    // ETI frames (ETI-NA, TS NI) are keyed by their PID with port 0
+    if (key.port == 0) {
+        auto it = etina_parsers_.find(static_cast<uint16_t>(key.ip));
+        if (it != etina_parsers_.end()) return it->second->utc_now(utc_ms);
+    }
+    auto it = parsers_.find(key);
+    return it != parsers_.end() && it->second->utc_now(utc_ms);
+}
+
 void EnsembleManager::processIpPacket(const uint8_t* ip_data, size_t len) {
     if (len < 28) return;  // Need at least IP + UDP header
 

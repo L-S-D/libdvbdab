@@ -122,9 +122,19 @@ std::vector<uint8_t> buildPmtSection(const TsService& service, uint8_t version) 
     section.push_back(0xE0 | ((service.audio_pid >> 8) & 0x1F));
     section.push_back(service.audio_pid & 0xFF);
 
-    // reserved(4) + ES_info_length(12) = 0
-    section.push_back(0xF0);
-    section.push_back(0x00);
+    // reserved(4) + ES_info_length(12): the language of the audio, when it
+    // is known (ISO_639_language_descriptor, audio_type 0 = undefined)
+    if (service.language.size() == 3) {
+        section.push_back(0xF0);
+        section.push_back(0x06);
+        section.push_back(0x0A);
+        section.push_back(0x04);
+        for (char c : service.language) section.push_back(static_cast<uint8_t>(c));
+        section.push_back(0x00);
+    } else {
+        section.push_back(0xF0);
+        section.push_back(0x00);
+    }
 
     // its dynamic label as RDS: stream type 0x89 with an ancillary_data_descriptor
     // (EN 300 468: tag 0x6B, ancillary_data_identifier bit 6 = RDS via UECP coding)
@@ -258,7 +268,7 @@ namespace {
 // One section of an EIT schedule with these events
 std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid, uint16_t onid, uint8_t version,
     uint8_t table_id, uint8_t section_number, uint8_t last_section_number, uint8_t segment_last_section,
-    const std::vector<const EpgProgramme*>& events) {
+    const std::vector<const EpgProgramme*>& events, const std::string& language, uint8_t content) {
 
     std::vector<uint8_t> section;
     section.reserve(4096);  // EIT schedule: max section size
@@ -348,10 +358,9 @@ std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid,
         size_t desc_size_pos = section.size();
         section.push_back(0x00);
 
-        // language = "ger"
-        section.push_back('g');
-        section.push_back('e');
-        section.push_back('r');
+        // the language of the service; "und" (undetermined) when the
+        // ensemble does not say it
+        for (char c : language) section.push_back(static_cast<uint8_t>(c));
 
         // event_name with UTF-8 charset prefix (0x15 per EN 300 468)
         section.push_back(static_cast<uint8_t>(name.size() + 1));
@@ -365,6 +374,14 @@ std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid,
 
         // Fill descriptor length
         section[desc_size_pos] = static_cast<uint8_t>(section.size() - desc_size_pos - 1);
+
+        // Content descriptor (0x54): what the service broadcasts
+        if (content) {
+            section.push_back(0x54);
+            section.push_back(0x02);
+            section.push_back(content);
+            section.push_back(0x00);
+        }
 
         // Fill descriptors_loop_length with running_status=1 (not running)
         size_t desc_len = section.size() - desc_start;
@@ -391,8 +408,10 @@ std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid,
 
 std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, uint16_t tsid, uint16_t onid,
                                                            uint8_t version,
-                                                           const std::vector<EpgProgramme>& programmes) {
+                                                           const std::vector<EpgProgramme>& programmes,
+                                                           const std::string& language, uint8_t content) {
     constexpr size_t MAX_SECTION_PAYLOAD = 4000;
+    const std::string lang = language.size() == 3 ? language : "und";
 
     // Pack events into packed
     std::vector<std::vector<const EpgProgramme*>> packed;
@@ -400,7 +419,7 @@ std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, 
     size_t current_size = 14;  // EIT section header size
 
     for (const auto& prog : programmes) {
-        size_t event_size = 12 + 10 + prog.name.size() + prog.description.size();
+        size_t event_size = 12 + 10 + prog.name.size() + prog.description.size() + (content ? 4 : 0);
 
         if (current_size + event_size > MAX_SECTION_PAYLOAD && !current_section.empty()) {
             packed.push_back(std::move(current_section));
@@ -423,9 +442,19 @@ std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, 
     std::vector<std::vector<uint8_t>> sections;
     for (size_t i = 0; i < packed.size(); i++) {
         sections.push_back(buildEitScheduleSection(service_id, tsid, onid, version, 0x50,
-            static_cast<uint8_t>(i), last_section, last_section, packed[i]));
+            static_cast<uint8_t>(i), last_section, last_section, packed[i], lang, content));
     }
     return sections;
+}
+
+std::vector<uint8_t> buildTdtSection(int64_t utc_seconds) {
+    auto bcd = [](int v) { return static_cast<uint8_t>((v / 10) << 4 | (v % 10)); };
+    int64_t days = utc_seconds / 86400;
+    int rest = static_cast<int>(utc_seconds % 86400);
+    int mjd = 40587 + static_cast<int>(days);
+    // table_id 0x70, section_syntax_indicator 0, section_length 5, no CRC
+    return {0x70, 0x70, 0x05, static_cast<uint8_t>(mjd >> 8), static_cast<uint8_t>(mjd),
+            bcd(rest / 3600), bcd(rest % 3600 / 60), bcd(rest % 60)};
 }
 
 } // namespace dvbdab

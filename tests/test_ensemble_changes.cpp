@@ -3,6 +3,7 @@
 // waiting, and a reconfiguration - at the FIC parser, and through a streamer
 // of the C API into the PAT and SDT that go out. Synthetic FIGs, no capture.
 
+#include "dab_tables.hpp"
 #include <dvbdab/dvbdab_c.h>
 #include "../src/dab_parser.h"
 #include "../src/ensemble_manager.hpp"
@@ -324,6 +325,64 @@ int main() {
         check(c && c->label == "\xC5\xB8", "a label in the DAB character set (0x8F is Y with diaeresis)");
     }
     {
+        // language, programme type, country and time of the FIC
+        DABParser p;
+        Fic fic;
+        fic.config = cat({ensemble_info(0x1234), fig0(1, cat({subch_eep(1, 18, 3), subch_eep(2, 18, 3)})),
+                          fig0(2, cat({service(0x1001, 1, true), service(0x1002, 2, true)}))});
+        const int64_t t = 1795000000;                       // 2026-11-18 11:06:40 UTC
+        const int mjd = 40587 + static_cast<int>(t / 86400), hh = 11, mm = 6, ss = 40, ms = 123;
+        Bytes time_long = {static_cast<uint8_t>(mjd >> 10), static_cast<uint8_t>(mjd >> 2),
+                           static_cast<uint8_t>((mjd & 3) << 6 | 0x08 | hh >> 2), static_cast<uint8_t>((hh & 3) << 6 | mm),
+                           static_cast<uint8_t>(ss << 2 | ms >> 8), static_cast<uint8_t>(ms & 0xFF)};
+        Bytes time_short = {time_long[0], time_long[1], static_cast<uint8_t>((mjd & 3) << 6 | 0 >> 2), 0};  // 00:00
+        Bytes time_bad = time_long;
+        time_bad[2] = static_cast<uint8_t>((mjd & 3) << 6 | 0x08 | 25 >> 2);                               // 25 h
+        time_bad[3] = static_cast<uint8_t>((25 & 3) << 6 | mm);
+        Bytes other_ensemble = {4, 0x40 | 17, 0x10, 0x01, 0x00, 5};   // FIG 0/17 with OE: of another ensemble
+        fic.labels = {
+            label(0, 0x1234, "Ensemble"), label(1, 0x1001, "One"), label(1, 0x1002, "Two"),
+            // FIG 0/5: a long form entry (skipped), subchannel 1 German, subchannel 2 Norwegian
+            fig0(5, {0x80, 0x01, 0x09, 0x01, 0x08, 0x02, 0x1E}),
+            // FIG 0/17: 0x1001 static Pop Music with language and coarse code, 0x1002 dynamic News
+            cat({fig0(17, {0x10, 0x01, 0x30, 0x08, 10, 0x00, 0x10, 0x02, 0x80, 1}), other_ensemble}),
+            // FIG 0/9: LTO +1 h, ECC 0xE0, international table 1
+            fig0(9, {0x02, 0xE0, 0x01}),
+            fig0(10, time_long),
+        };
+        int n = 0;
+        int64_t ms_got = 0, frame = -1;
+        check(!p.utc(ms_got, frame), "no time before the ensemble sent one");
+        feed(p, fic, 70, n);
+        const DABEnsemble& e = p.get_ensemble();
+        const DABService *a = find(e, 0x1001), *b = find(e, 0x1002);
+        check(a && a->language == 0x08 && std::string(dabLanguageIso639(a->language)) == "ger" &&
+                  b && b->language == 0x1E && std::string(dabLanguageIso639(b->language)) == "nor",
+              "FIG 0/5: the language of each service, the long form skipped");
+        check(a && a->pty == 10 && b && b->pty == 1,
+              "FIG 0/17: static and dynamic programme type, not the one of another ensemble");
+        check(e.has_country && e.lto_half_hours == 2 && e.ecc == 0xE0 && e.international_table == 1,
+              "FIG 0/9: LTO, ECC and international table");
+        check(p.utc(ms_got, frame) && ms_got == t * 1000 + ms && frame > 0 && frame <= p.frames(),
+              "FIG 0/10: date and time in the long form");
+        fic.labels = {fig0(10, time_short), fig0(10, time_bad)};
+        feed(p, fic, 10, n);
+        check(p.utc(ms_got, frame) && ms_got == t * 1000 + ms, "a short form or an impossible time does not replace it");
+        // a negative LTO
+        fic.labels = {fig0(9, {0x2A, 0xE0, 0x01})};
+        feed(p, fic, 10, n);
+        check(p.get_ensemble().lto_half_hours == -10, "FIG 0/9: an LTO of minus five hours");
+
+        check(std::string(dabLanguageIso639(0x7F)) == "amh" && std::string(dabLanguageIso639(0x45)) == "zul" &&
+                  std::string(dabLanguageIso639(0x56)) == "rus" && std::string(dabLanguageIso639(0x2B)) == "wln" &&
+                  !*dabLanguageIso639(0x00) && !*dabLanguageIso639(0x2C) && !*dabLanguageIso639(0x44) &&
+                  !*dabLanguageIso639(0xFF),
+              "language codes: both tables, nothing for codes without a meaning");
+        check(dabPtyToDvbContent(4, 1) == 0x40 && dabPtyToDvbContent(14, 1) == 0x62 && dabPtyToDvbContent(4, 2) == 0 &&
+                  dabPtyToDvbContent(0, 1) == 0 && dabPtyToDvbContent(31, 1) == 0,
+              "programme types as DVB content, of the international table 1 only");
+    }
+    {
         // a data service and a service whose subchannel never comes do not keep the others waiting
         DABParser p;
         Fic fic;
@@ -448,6 +507,36 @@ int main() {
             std::string want;
             for (int i = 0; i < 16; i++) want += "\xC3\xA4";
             check(got == want, "a label of 16 umlauts is whole in the C structure (32 bytes of UTF-8)");
+            dvbdab_streamer_free_ensemble(e);
+        }
+        {
+            // the C structures: language, programme type, country, and the time of the ensemble
+            Fic info = two;
+            const int64_t t = 1795000000;
+            const int mjd = 40587 + static_cast<int>(t / 86400), hh = 11, mm = 6, ss = 40;
+            info.labels.push_back(fig0(5, {0x01, 0x1E}));
+            info.labels.push_back(fig0(17, {0x10, 0x01, 0x00, 14}));
+            info.labels.push_back(fig0(9, {0x02, 0xE2, 0x01}));
+            info.labels.push_back(fig0(10, {static_cast<uint8_t>(mjd >> 10), static_cast<uint8_t>(mjd >> 2),
+                                            static_cast<uint8_t>((mjd & 3) << 6 | 0x08 | hh >> 2),
+                                            static_cast<uint8_t>((hh & 3) << 6 | mm), static_cast<uint8_t>(ss << 2), 0}));
+            Stream s3;
+            int64_t ms = 0;
+            check(dvbdab_streamer_get_time(s3.s, &ms) == 0, "a streamer has no time before its ensemble sent one");
+            s3.run(info, {1, 2}, 200);
+            dvbdab_ensemble_t* e = dvbdab_streamer_get_ensemble(s3.s);
+            bool one = false, two_ok = false;
+            for (int i = 0; e && i < e->service_count; i++) {
+                const dvbdab_service_t& sv = e->services[i];
+                if (sv.sid == 0x1001) one = std::string(sv.language) == "nor" && sv.pty == 14;
+                if (sv.sid == 0x1002) two_ok = std::string(sv.language).empty() && sv.pty == 0;
+            }
+            check(one && two_ok, "the C structures have language and programme type of a service, nothing where none came");
+            check(e && e->has_country && e->ecc == 0xE2 && e->lto_half_hours == 2 && e->international_table == 1,
+                  "and country, LTO and international table of the ensemble");
+            // 200 frames of 24 ms were fed; the time came with one of the last seven
+            check(dvbdab_streamer_get_time(s3.s, &ms) == 1 && ms >= t * 1000 && ms < t * 1000 + 7 * 24,
+                  "the time of the ensemble goes on with the frames");
             dvbdab_streamer_free_ensemble(e);
         }
         check(st.out.programs == (std::set<uint16_t>{0x1001, 0x1002}) && st.out.pat_changes > v,

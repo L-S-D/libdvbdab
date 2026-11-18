@@ -15,6 +15,10 @@
  * - FIG 0/0: Ensemble information
  * - FIG 0/1: Subchannel organization (basic)
  * - FIG 0/2: Service organization
+ * - FIG 0/5: Service component language
+ * - FIG 0/9: Country, LTO and international table
+ * - FIG 0/10: Date and time
+ * - FIG 0/17: Programme type
  * - FIG 0/8: Service component linkage
  * - FIG 0/13: User application information (EPG detection)
  * - FIG 1/0: Ensemble label
@@ -113,6 +117,24 @@ public:
     /// ensemble label): the FIC is read as long as the stream runs
     uint32_t revision() const { return revision_; }
 
+    /// The date and time the ensemble sends (FIG 0/10): UTC in milliseconds
+    /// since 1970 as of the FIC frame `frame` (frames() counts them, 24 ms
+    /// apart). false when none came yet.
+    bool utc(int64_t& utc_ms, int64_t& frame) const {
+        if (utc_frame_ < 0) return false;
+        utc_ms = utc_ms_;
+        frame = utc_frame_;
+        return true;
+    }
+    int64_t frames() const { return fic_frame_; }
+
+    /// That time as of the last frame; false when the ensemble sent none
+    bool utc_now(int64_t& utc_ms) const {
+        if (utc_frame_ < 0) return false;
+        utc_ms = utc_ms_ + (fic_frame_ - utc_frame_) * 24;
+        return true;
+    }
+
     /// Get EPG subchannel(s) detected from FIG 0/13 + FIG 0/8
     const std::vector<int>& get_epg_subchannels() const { return epg_subchannels_; }
 
@@ -120,7 +142,7 @@ private:
     void process_fic(const uint8_t* fic_data, int fic_len, int mode_id);
     void process_fib(const uint8_t* fib);
     void process_fig(const uint8_t* fig, int fig_len);
-    void process_fig_0(const uint8_t* data, int len, int ext, int pd);
+    void process_fig_0(const uint8_t* data, int len, int ext, int pd, int oe);
     void process_fig_1(const uint8_t* data, int len, int ext, int charset);
 
     struct SubChannel {
@@ -192,6 +214,22 @@ private:
     std::map<uint32_t, int64_t> service_seen_;
     std::map<int, int64_t> subch_seen_;
     uint32_t revision_ = 0;
+
+    // Language of a subchannel (FIG 0/5), programme type of a service (FIG 0/17)
+    std::map<int, uint8_t> subch_language_;
+    std::map<uint32_t, uint8_t> pty_static_;
+    std::map<uint32_t, uint8_t> pty_dynamic_;
+
+    // FIG 0/9
+    bool has_country_ = false;
+    uint8_t ecc_ = 0;
+    int8_t lto_half_hours_ = 0;
+    uint8_t international_table_ = 0;
+
+    // FIG 0/10: UTC (ms since 1970) as of FIC frame utc_frame_ (-1: none yet)
+    int64_t utc_ms_ = 0;
+    int64_t utc_frame_ = -1;
+    bool utc_long_ = false;
 };
 
 } // namespace dvbdab
