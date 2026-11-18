@@ -29,17 +29,21 @@ public:
 
     // TS data, any amount
     void feed(const uint8_t* data, size_t len) {
-        if (!partial_.empty()) {
-            size_t take = 188 - partial_.size() < len ? 188 - partial_.size() : len;
-            partial_.insert(partial_.end(), data, data + take);
+        if (partial_len_) {
+            size_t take = sizeof(partial_) - partial_len_ < len ? sizeof(partial_) - partial_len_ : len;
+            memcpy(partial_ + partial_len_, data, take);
+            partial_len_ += take;
             data += take;
             len -= take;
-            if (partial_.size() < 188) return;
-            packet(partial_.data());
-            partial_.clear();
+            if (partial_len_ < sizeof(partial_)) return;
+            packet(partial_);
+            partial_len_ = 0;
         }
         for (; len >= 188; data += 188, len -= 188) packet(data);
-        if (len) partial_.assign(data, data + len);
+        if (len) {
+            memcpy(partial_, data, len);   // (less than a packet is left)
+            partial_len_ = len;
+        }
     }
 
     uint64_t getSectionCount() const { return sections_; }
@@ -160,7 +164,8 @@ private:
     IpCallback cb_;
     uint32_t filter_ip_{0};
     uint16_t filter_port_{0};
-    std::vector<uint8_t> partial_;
+    uint8_t partial_[188];   // the start of a TS packet that came in two parts
+    size_t partial_len_ = 0;
     std::array<uint8_t, 4100> sec_{};
     size_t have_{0};
     int cc_{-1};
