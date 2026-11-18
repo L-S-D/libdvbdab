@@ -38,6 +38,10 @@ Service information
   of the service - "und" when the ensemble does not say it, where every
   event said "ger" before - and have the programme type as their content
   descriptor. A TDT (PID 0x14) with the time of the ensemble every 5 s.
+- TS: EIT present/following (table 0x4E) every 2 s for the services with a
+  schedule, by the time of the ensemble. The SDT flags say which service
+  has an EIT schedule and an EIT present/following; before, every service
+  claimed a schedule.
 
 C API
 - Statistics (`DVBDAB_HAVE_STATS`): `dvbdab_streamer_get_stats()` and

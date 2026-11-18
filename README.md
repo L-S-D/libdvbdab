@@ -62,7 +62,10 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 
 - **MPEG-TS Output**
   - Custom TS muxer (no FFmpeg dependency)
-  - DVB SI: PAT, PMT, SDT, EIT schedule (from EHB), TDT
+  - DVB SI: PAT, PMT, SDT, EIT schedule (from EHB) and EIT
+    present/following (the programme of the schedule that is on by the time
+    of the ensemble, and the next one), TDT. The SDT says for each service
+    which EIT it has.
   - The PMT has the language of the audio (ISO 639-2) when the ensemble
     says it. EIT events are in that language ("und" without) and carry the
     programme type of the service as their content (genre; the RDS types of

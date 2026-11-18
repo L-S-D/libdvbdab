@@ -174,9 +174,8 @@ std::vector<std::vector<uint8_t>> buildSdtSections(uint16_t tsid, uint16_t onid,
         e.push_back((svc.sid >> 8) & 0xFF);
         e.push_back(svc.sid & 0xFF);
 
-        // reserved(6) + EIT_schedule_flag(1) + EIT_present_following_flag(1):
-        // there is a schedule, no present/following
-        e.push_back(0xFE);
+        // reserved(6) + EIT_schedule_flag(1) + EIT_present_following_flag(1)
+        e.push_back(static_cast<uint8_t>(0xFC | (svc.eit_schedule ? 0x02 : 0) | (svc.eit_pf ? 0x01 : 0)));
 
         // running_status(3) + free_CA_mode(1) + descriptors_loop_length(12)
         size_t desc_len_pos = e.size();
@@ -268,7 +267,8 @@ namespace {
 // One section of an EIT schedule with these events
 std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid, uint16_t onid, uint8_t version,
     uint8_t table_id, uint8_t section_number, uint8_t last_section_number, uint8_t segment_last_section,
-    const std::vector<const EpgProgramme*>& events, const std::string& language, uint8_t content) {
+    const std::vector<const EpgProgramme*>& events, const std::string& language, uint8_t content,
+    uint8_t running_status = 1) {
 
     std::vector<uint8_t> section;
     section.reserve(4096);  // EIT schedule: max section size
@@ -383,9 +383,10 @@ std::vector<uint8_t> buildEitScheduleSection(uint16_t service_id, uint16_t tsid,
             section.push_back(0x00);
         }
 
-        // Fill descriptors_loop_length with running_status=1 (not running)
+        // Fill descriptors_loop_length with the running_status (1 not
+        // running, 4 running), free_CA_mode 0
         size_t desc_len = section.size() - desc_start;
-        section[desc_len_pos] = 0x20 | ((desc_len >> 8) & 0x0F);  // running_status=1
+        section[desc_len_pos] = static_cast<uint8_t>(running_status << 5 | ((desc_len >> 8) & 0x0F));
         section[desc_len_pos + 1] = desc_len & 0xFF;
     }
 
@@ -445,6 +446,20 @@ std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, 
             static_cast<uint8_t>(i), last_section, last_section, packed[i], lang, content));
     }
     return sections;
+}
+
+std::vector<std::vector<uint8_t>> buildEitPresentFollowingSections(uint16_t service_id, uint16_t tsid, uint16_t onid,
+                                                                   uint8_t version, const EpgProgramme* present,
+                                                                   const EpgProgramme* following,
+                                                                   const std::string& language, uint8_t content) {
+    const std::string lang = language.size() == 3 ? language : "und";
+    std::vector<const EpgProgramme*> now, next;
+    if (present) now.push_back(present);
+    if (following) next.push_back(following);
+    return {
+        buildEitScheduleSection(service_id, tsid, onid, version, 0x4E, 0, 1, 1, now, lang, content, 4),
+        buildEitScheduleSection(service_id, tsid, onid, version, 0x4E, 1, 1, 1, next, lang, content, 1),
+    };
 }
 
 std::vector<uint8_t> buildTdtSection(int64_t utc_seconds) {

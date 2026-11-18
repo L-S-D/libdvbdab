@@ -200,6 +200,11 @@ private:
     // EIT schedule (0x50+) methods
     void outputEitScheduleCarousel();  // Output complete EIT table for all services
 
+    // EIT present/following (0x4E) of the services with a schedule, by the
+    // time of the ensemble; and which service has which EIT, for the SDT
+    void outputEitPresentFollowing();
+    void refreshEitFlags();
+
     // Output a section as TS packets
     // set_discontinuity: set discontinuity_indicator on first packet (for EIT version changes)
     void outputSection(uint16_t pid, const std::vector<uint8_t>& section, bool set_discontinuity = false);
@@ -278,6 +283,18 @@ private:
     bool eit_carousel_pending_{false};  // True when there are pending changes to apply
     static constexpr int64_t EIT_INTERVAL_PTS = 10 * 90000;  // the whole schedule every 10 s
     int64_t last_eit_pts_{-1};
+
+    // EIT present/following: what was sent last per service, to know when
+    // it changes (the events by their start time, 0 = none)
+    struct PresentFollowing {
+        int64_t present{0}, following{0};
+        uint8_t schedule_version{0};
+        uint8_t version{0};
+        bool sent{false};
+    };
+    std::map<uint16_t, PresentFollowing> eit_pf_;
+    static constexpr int64_t EIT_PF_INTERVAL_PTS = 2 * 90000;
+    int64_t last_pf_pts_{-1};
 
     // TDT: the time of the ensemble, when it sends one
     static constexpr int64_t TDT_INTERVAL_PTS = 5 * 90000;

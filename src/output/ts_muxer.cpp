@@ -35,6 +35,7 @@ void TsMuxer::removeService(uint16_t sid) {
         subch_to_sid_[services_[i].subchannel_id] = services_[i].sid;
     }
     audio_buffers_.erase(sid);
+    eit_pf_.erase(sid);
     frame_step_.erase(sid);
     last_audio_pts_.erase(sid);
     radio_text_.erase(sid);
@@ -463,8 +464,65 @@ void TsMuxer::dropAudio(uint16_t sid) {
     it->second.last_pts = -1;
 }
 
+void TsMuxer::refreshEitFlags() {
+    bool changed = false;
+    for (auto& s : services_) {
+        auto it = service_schedules_.find(s.sid);
+        bool schedule = it != service_schedules_.end() && !it->second.programmes.empty();
+        bool pf = schedule && utc_ms_ >= 0;
+        if (s.eit_schedule != schedule || s.eit_pf != pf) {
+            s.eit_schedule = schedule;
+            s.eit_pf = pf;
+            changed = true;
+        }
+    }
+    if (changed) sdt_version_ = (sdt_version_ + 1) & 0x1F;
+}
+
+void TsMuxer::outputEitPresentFollowing() {
+    if (utc_ms_ < 0) return;
+    const time_t now = static_cast<time_t>(utc_ms_ / 1000);
+
+    for (const auto& [service_id, schedule] : service_schedules_) {
+        auto idx = sid_to_index_.find(service_id);
+        if (schedule.programmes.empty() || idx == sid_to_index_.end()) continue;
+
+        // the programmes are in the order of their start
+        const EpgProgramme* present = nullptr;
+        const EpgProgramme* following = nullptr;
+        for (const auto& p : schedule.programmes) {
+            if (p.start_time <= now && now < p.start_time + p.duration_seconds) {
+                present = &p;
+            } else if (p.start_time > now) {
+                following = &p;
+                break;
+            }
+        }
+
+        // a new version when another programme is on, or the schedule said something new
+        PresentFollowing& pf = eit_pf_[service_id];
+        int64_t p_id = present ? static_cast<int64_t>(present->start_time) : 0;
+        int64_t f_id = following ? static_cast<int64_t>(following->start_time) : 0;
+        uint8_t sv = eit_schedule_version_[service_id];
+        if (pf.sent && (pf.present != p_id || pf.following != f_id || pf.schedule_version != sv)) {
+            pf.version = (pf.version + 1) & 0x1F;
+        }
+        pf.present = p_id;
+        pf.following = f_id;
+        pf.schedule_version = sv;
+        pf.sent = true;
+
+        const TsService& svc = services_[idx->second];
+        for (const auto& section : buildEitPresentFollowingSections(service_id, tsid_, onid_, pf.version, present,
+                                                                    following, svc.language, svc.content)) {
+            outputSection(PID_EIT, section);
+        }
+    }
+}
+
 void TsMuxer::tick(int64_t pts) {
     outputRadioTexts(pts);
+    refreshEitFlags();
 
     // Time-based PSI output (DVB compliant: PAT/PMT every 500ms, SDT every 2s)
     // Track maximum PTS seen to handle multi-service streams where each service has different PTS
@@ -489,6 +547,12 @@ void TsMuxer::tick(int64_t pts) {
     if (utc_ms_ >= 0 && pts > last_tdt_pts_ && (last_tdt_pts_ < 0 || pts - last_tdt_pts_ >= TDT_INTERVAL_PTS)) {
         last_tdt_pts_ = pts;
         outputSection(PID_TDT, buildTdtSection(utc_ms_ / 1000));
+    }
+
+    // What is on now and next, every 2 s
+    if (pts > last_pf_pts_ && (last_pf_pts_ < 0 || pts - last_pf_pts_ >= EIT_PF_INTERVAL_PTS)) {
+        last_pf_pts_ = pts;
+        outputEitPresentFollowing();
     }
 
     // EIT schedule carousel - output complete table periodically: by the

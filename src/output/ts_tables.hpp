@@ -57,6 +57,8 @@ struct TsService {
     int bitrate{0};         ///< Audio bitrate in kbps
     std::string language;   ///< Language of the audio, ISO 639-2 (three letters); empty = not known
     uint8_t content{0};     ///< What it broadcasts, as the nibbles of a DVB content_descriptor; 0 = not known
+    bool eit_schedule{false};  ///< The TS has an EIT schedule for it (the muxer sets it)
+    bool eit_pf{false};        ///< The TS has an EIT present/following for it (the muxer sets it)
 };
 
 /// The PAT: every service with the PID of its PMT
@@ -81,6 +83,15 @@ std::vector<std::vector<uint8_t>> buildEitScheduleSections(uint16_t service_id, 
                                                            const std::vector<EpgProgramme>& programmes,
                                                            const std::string& language = "",
                                                            uint8_t content = 0);
+
+/// The EIT present/following (table 0x4E) of one service: section 0 with
+/// the present event (running), section 1 with the following one. Either
+/// may be null: its section is then without an event.
+std::vector<std::vector<uint8_t>> buildEitPresentFollowingSections(uint16_t service_id, uint16_t tsid, uint16_t onid,
+                                                                   uint8_t version, const EpgProgramme* present,
+                                                                   const EpgProgramme* following,
+                                                                   const std::string& language = "",
+                                                                   uint8_t content = 0);
 
 /// The TDT: UTC, in seconds since 1970
 std::vector<uint8_t> buildTdtSection(int64_t utc_seconds);

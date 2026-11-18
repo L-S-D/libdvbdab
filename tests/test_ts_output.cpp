@@ -43,6 +43,11 @@ struct Checker {
     // EIT: per service the events seen (start time bytes), and how often its section 0 came
     std::map<uint16_t, std::set<std::vector<uint8_t>>> events;
     std::map<uint16_t, size_t> eit_passes;
+    // EIT present/following: per service and section (0 present, 1 following) the event id (-1: none)
+    // and running status of the last one seen, the versions seen; SDT: the two EIT flags of a service
+    std::map<uint16_t, std::map<int, int>> pf_event, pf_running;
+    std::map<uint16_t, std::set<int>> pf_versions;
+    std::map<uint16_t, int> sdt_eit_flags;
 
     static bool psi(uint16_t pid) { return pid < 0x20 || (pid >= 0x100 && pid < 0x200); }
 
@@ -51,7 +56,14 @@ struct Checker {
         if (n > max_section[pid]) max_section[pid] = n;
         uint32_t crc = 0xFFFFFFFF;
         for (size_t i = 0; i < n; i++) crc = (crc << 8) ^ dvb_crc32_table[((crc >> 24) ^ s[i]) & 0xFF];
-        if (crc != 0) bad_crc++;
+        if (crc != 0 && pid != 0x14) bad_crc++;   // (a TDT has no CRC)
+        if (pid == 0x12 && n >= 18 && s[0] == 0x4E) {
+            uint16_t sid = static_cast<uint16_t>(s[3] << 8 | s[4]);
+            pf_versions[sid].insert((s[5] >> 1) & 0x1F);
+            bool event = 14 + 12 <= n - 4;
+            pf_event[sid][s[6]] = event ? (s[14] << 8 | s[15]) : -1;
+            pf_running[sid][s[6]] = event ? s[14 + 10] >> 5 : -1;
+        }
         if (pid == 0x12 && n >= 18 && s[0] == 0x50) {
             uint16_t sid = static_cast<uint16_t>(s[3] << 8 | s[4]);
             if (s[6] == 0) eit_passes[sid]++;
@@ -67,6 +79,7 @@ struct Checker {
             if (s[6] == 0) sdt_sections = static_cast<size_t>(s[7]) + 1;
             for (size_t p = 11; p + 5 <= n - 4;) {
                 sdt_services.insert(static_cast<uint16_t>(s[p] << 8 | s[p + 1]));
+                sdt_eit_flags[static_cast<uint16_t>(s[p] << 8 | s[p + 1])] = s[p + 2] & 0x03;
                 p += 5 + static_cast<size_t>((s[p + 3] & 0x0F) << 8 | s[p + 4]);
             }
         }
@@ -409,6 +422,39 @@ int main() {
             bool eit = std::search(ts.begin() + static_cast<std::ptrdiff_t>(cut), ts.end(), content, content + 4) != ts.end();
             check(!before && pmt && eit, "language and content that come while the stream runs are in PMT and EIT");
         }
+    }
+
+    {
+        // EIT present/following by the time of the ensemble; the SDT says which service has which EIT
+        const time_t t0 = 1795000000;
+        auto id = [](time_t start) { return static_cast<int>((start / 60) & 0xFFFF); };
+        DabStreamProcessor p;
+        Checker c;
+        p.setOutput([&](const uint8_t* d, size_t len) { c.feed(d, len); });
+        add_services(p, 2);
+        p.getMuxer().updateSchedule(0x1000, schedule(0x1000, t0, 5, 1800));   // service 1 has none
+        run(p, 2, 6);
+        check(c.pf_event.empty() && c.sdt_eit_flags[0x1000] == 0x02 && c.sdt_eit_flags[0x1001] == 0x00,
+              "without a time from the ensemble no EIT present/following; the SDT says a schedule for the service that has one");
+        p.setUtc((t0 + 2000) * 1000LL);   // in the second programme
+        run(p, 2, 6);
+        check(c.pf_event[0x1000][0] == id(t0 + 1800) && c.pf_running[0x1000][0] == 4 &&
+                  c.pf_event[0x1000][1] == id(t0 + 3600) && c.pf_running[0x1000][1] == 1 && !c.pf_event.count(0x1001),
+              "EIT present/following: the programme that is on (running) and the next one");
+        check(c.sdt_eit_flags[0x1000] == 0x03 && c.sdt_eit_flags[0x1001] == 0x00 && c.event_ids[0x1000].count(
+                  static_cast<uint16_t>(id(t0 + 1800))),
+              "the SDT says both EITs for it, and the events have the ids of the schedule");
+        size_t versions = c.pf_versions[0x1000].size();
+        p.setUtc((t0 + 3700) * 1000LL);   // the third programme began
+        run(p, 2, 6);
+        check(c.pf_event[0x1000][0] == id(t0 + 3600) && c.pf_event[0x1000][1] == id(t0 + 5400) &&
+                  c.pf_versions[0x1000].size() == versions + 1,
+              "when the next programme begins it is the present one, in a new version");
+        p.setUtc((t0 + 5 * 1800 + 10) * 1000LL);   // after the last programme
+        run(p, 2, 6);
+        check(c.pf_event[0x1000][0] == -1 && c.pf_event[0x1000][1] == -1,
+              "after the last programme of the schedule both sections are without an event");
+        check(c.bad_crc == 0 && c.cc_errors == 0, "and the TS is in order");
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);
