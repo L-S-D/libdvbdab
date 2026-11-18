@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
 
     if (!std::ifstream(filename)) {
         printf("SKIP: cannot open %s\n", filename);
-        return 0;
+        return 77;  // ctest: skipped, not passed
     }
 
     // all streams

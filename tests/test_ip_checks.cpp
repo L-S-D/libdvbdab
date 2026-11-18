@@ -81,7 +81,12 @@ int main() {
         m.processIpPacket(bad.data(), bad.size());
         check(m.getStreamCount() == 0, "a damaged header makes no stream");
         m.processIpPacket(p.data(), p.size());
-        check(m.getStreamCount() == 1, "a right packet makes a stream");
+        check(m.getStreamCount() == 0, "a right packet that is not EDI makes no stream");
+        // what starts like an AF packet (and is none: no TAG items)
+        std::vector<uint8_t> af = {'A', 'F', 0, 0, 0, 0, 0, 0, 0x10, 'T'};
+        auto e = make_packet(ip, 5556, af);
+        m.processIpPacket(e.data(), e.size());
+        check(m.getStreamCount() == 1, "a right packet that starts like EDI makes a stream");
         check(m.getAllEnsembles().empty(), "a UDP stream without DAB is no ensemble");
     }
 

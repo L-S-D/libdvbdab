@@ -12,6 +12,14 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# -DDVBDAB_SANITIZE=ON: library, tools and tests with AddressSanitizer and
+# UBSan (for the tests and the fuzz harnesses; not for a library to install)
+option(DVBDAB_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(DVBDAB_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer -g)
+    add_link_options(-fsanitize=address,undefined)
+endif()
+
 # Include directories for the new library structure
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -264,6 +272,25 @@ add_executable(edi_extract
     src/parsers/pf_reassembler.cpp
     src/logging.cpp
 )
+
+# ----------------------------------------------------------------------------
+# Tests that check themselves, without a capture: `ctest` runs them
+# ----------------------------------------------------------------------------
+enable_testing()
+
+foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits)
+    add_executable(${t} tests/${t}.cpp)
+    target_link_libraries(${t} dvbdab)
+    add_test(NAME ${t} COMMAND ${t})
+endforeach()
+add_test(NAME test_ip_checks COMMAND test_ip_checks)
+add_test(NAME test_etina_sync COMMAND test_etina_sync)
+
+# With a capture (not in the repository): -DDVBDAB_TEST_CAPTURE=<an MPE
+# capture of an EDI ensemble, PID 3000>; without it the test is skipped
+set(DVBDAB_TEST_CAPTURE "" CACHE FILEPATH "MPE capture for test_ipv4_input")
+add_test(NAME test_ipv4_input COMMAND test_ipv4_input ${DVBDAB_TEST_CAPTURE})
+set_tests_properties(test_ipv4_input PROPERTIES SKIP_RETURN_CODE 77)
 
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
 
