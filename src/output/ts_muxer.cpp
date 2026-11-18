@@ -1,4 +1,5 @@
 #include "ts_muxer.hpp"
+#include "rds_uecp.hpp"
 #include "../utils/crc_utils.hpp"
 #include <algorithm>
 
@@ -59,14 +60,27 @@ void TsMuxer::updateServiceLabel(uint16_t sid, const std::string& name) {
     }
 }
 
+void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
+    std::string rds = rdsRadioText(text);
+    auto& rt = radio_text_[sid];
+    if (rds == rt.text && !rt.frame.empty()) return;
+    rt.text = rds;
+    rt.ab = !rt.ab;  // a new text: receivers start it anew
+    rt.frame = uecpRadioTextFrame(rds, rt.ab);
+    rt.sent_pts = -1;
+}
+
 void TsMuxer::setNowPlaying(uint16_t sid, const std::string& title, const std::string& artist) {
-    auto& np = now_playing_[sid];
-    if (np.title != title || np.artist != artist) {
-        np.title = title;
-        np.artist = artist;
-        np.event_id++;
-        // EIT p/f disabled - we don't have proper duration or following event info
-        // EIT schedule (0x50) from EHB data provides the real EPG
+    setRadioText(sid, artist.empty() ? title : artist + " - " + title);
+}
+
+void TsMuxer::outputRadioTexts(int64_t pts) {
+    for (auto& [sid, rt] : radio_text_) {
+        if (rt.sent_pts >= 0 && pts - rt.sent_pts < RADIO_TEXT_REPEAT_PTS) continue;
+        auto it = sid_to_index_.find(sid);
+        if (it == sid_to_index_.end() || !services_[it->second].rds_pid) continue;
+        outputPes(services_[it->second].rds_pid, rt.frame.data(), rt.frame.size(), pts, false, 0, 0xBD);
+        rt.sent_pts = pts;
     }
 }
 
@@ -217,6 +231,19 @@ void TsMuxer::outputPmt(const TsService& service) {
     section.push_back(0xF0);
     section.push_back(0x00);
 
+    // its dynamic label as RDS: stream type 0x89 with an ancillary_data_descriptor
+    // (EN 300 468: tag 0x6B, ancillary_data_identifier bit 6 = RDS via UECP coding)
+    if (service.rds_pid) {
+        section.push_back(0x89);
+        section.push_back(0xE0 | ((service.rds_pid >> 8) & 0x1F));
+        section.push_back(service.rds_pid & 0xFF);
+        section.push_back(0xF0);
+        section.push_back(0x03);
+        section.push_back(0x6B);
+        section.push_back(0x01);
+        section.push_back(0x40);
+    }
+
     // Section length
     size_t section_length = section.size() - 3 + 4;
     section[len_pos] = 0xB0 | ((section_length >> 8) & 0x0F);
@@ -317,139 +344,6 @@ void TsMuxer::outputSdt() {
 }
 
 // Helper to build one EIT p/f section
-std::vector<uint8_t> TsMuxer::buildEitSection(uint16_t sid, uint8_t section_number,
-    uint16_t event_id, time_t start_time, const std::string& event_name, bool is_running) {
-
-    std::vector<uint8_t> section;
-    section.reserve(128);  // EIT p/f: ~40 bytes header + event name + 4 bytes CRC
-
-    // table_id = 0x4E (EIT p/f actual)
-    section.push_back(0x4E);
-
-    size_t len_pos = section.size();
-    section.push_back(0x00);
-    section.push_back(0x00);
-
-    // service_id
-    section.push_back((sid >> 8) & 0xFF);
-    section.push_back(sid & 0xFF);
-
-    // reserved(2) + version_number(5) + current_next_indicator(1)
-    // Use fixed version 0 to avoid discontinuity errors in decoders
-    section.push_back(0xC1);  // version=0, current_next=1
-
-    // section_number (0=present, 1=following)
-    section.push_back(section_number);
-
-    // last_section_number = 1 (present + following)
-    section.push_back(0x01);
-
-    // transport_stream_id
-    section.push_back((tsid_ >> 8) & 0xFF);
-    section.push_back(tsid_ & 0xFF);
-
-    // original_network_id
-    section.push_back((onid_ >> 8) & 0xFF);
-    section.push_back(onid_ & 0xFF);
-
-    // segment_last_section_number = 1
-    section.push_back(0x01);
-
-    // last_table_id
-    section.push_back(0x4E);
-
-    // Event entry
-    section.push_back((event_id >> 8) & 0xFF);
-    section.push_back(event_id & 0xFF);
-
-    // start_time in MJD + BCD
-    int64_t days = start_time / 86400;
-    int mjd = 40587 + static_cast<int>(days);
-    section.push_back((mjd >> 8) & 0xFF);
-    section.push_back(mjd & 0xFF);
-
-    struct tm* utc = gmtime(&start_time);
-    auto toBcd = [](int v) -> uint8_t { return ((v / 10) << 4) | (v % 10); };
-    section.push_back(toBcd(utc->tm_hour));
-    section.push_back(toBcd(utc->tm_min));
-    section.push_back(toBcd(utc->tm_sec));
-
-    // duration: 01:00:00
-    section.push_back(0x01);
-    section.push_back(0x00);
-    section.push_back(0x00);
-
-    // running_status(3) + free_CA_mode(1) + descriptors_loop_length(12)
-    // running_status: 4=running, 1=not running
-    size_t desc_len_pos = section.size();
-    section.push_back(0x00);
-    section.push_back(0x00);
-    size_t desc_start = section.size();
-
-    // Short event descriptor (0x4D)
-    section.push_back(0x4D);
-    size_t desc_size_pos = section.size();
-    section.push_back(0x00);
-
-    // language = "ger"
-    section.push_back('g');
-    section.push_back('e');
-    section.push_back('r');
-
-    // event_name
-    size_t name_len = std::min(event_name.size(), size_t(250));
-    section.push_back(static_cast<uint8_t>(name_len));
-    for (size_t i = 0; i < name_len; i++) {
-        section.push_back(static_cast<uint8_t>(event_name[i]));
-    }
-
-    // text (empty)
-    section.push_back(0x00);
-
-    // Fill descriptor length
-    section[desc_size_pos] = static_cast<uint8_t>(section.size() - desc_size_pos - 1);
-
-    // Fill descriptors_loop_length with running_status
-    // running_status: 4=running (0x80), 1=not running (0x20)
-    uint8_t running_bits = is_running ? 0x80 : 0x20;  // 4<<5=0x80, 1<<5=0x20
-    size_t desc_len = section.size() - desc_start;
-    section[desc_len_pos] = running_bits | ((desc_len >> 8) & 0x0F);
-    section[desc_len_pos + 1] = desc_len & 0xFF;
-
-    // Section length
-    size_t section_length = section.size() - 3 + 4;
-    section[len_pos] = 0xF0 | ((section_length >> 8) & 0x0F);
-    section[len_pos + 1] = section_length & 0xFF;
-
-    // CRC32
-    uint32_t crc = dvbCrc32(section.data(), section.size());
-    section.push_back((crc >> 24) & 0xFF);
-    section.push_back((crc >> 16) & 0xFF);
-    section.push_back((crc >> 8) & 0xFF);
-    section.push_back(crc & 0xFF);
-
-    return section;
-}
-
-void TsMuxer::outputEit(uint16_t sid) {
-    auto it = now_playing_.find(sid);
-    if (it == now_playing_.end()) return;
-
-    const auto& np = it->second;
-    std::string event_name = np.artist.empty() ? np.title : (np.artist + " - " + np.title);
-    if (event_name.empty()) return;
-
-    time_t now = time(nullptr);
-
-    // Section 0: Present event (running)
-    auto section0 = buildEitSection(sid, 0, np.event_id, now, event_name, true);
-    outputSection(PID_EIT, section0);
-
-    // Section 1: Following event (not running) - starts 1 hour from now
-    auto section1 = buildEitSection(sid, 1, np.event_id + 1, now + 3600, event_name, false);
-    outputSection(PID_EIT, section1);
-}
-
 void TsMuxer::updateSchedule(uint16_t service_id, const EpgSchedule& schedule) {
     if (schedule.programmes.empty()) return;
 
@@ -685,7 +579,8 @@ std::vector<uint8_t> TsMuxer::buildEitScheduleSection(uint16_t service_id, uint8
     return section;
 }
 
-void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t pts, bool insert_pcr, int64_t pcr) {
+void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t pts, bool insert_pcr, int64_t pcr,
+                        uint8_t stream_id) {
     // PES packet length (6 bytes header + 5 PTS + data)
     // 0 = unbounded for large packets
     size_t pes_len = 3 + 5 + len;  // flags(2) + header_len(1) + PTS(5) + data
@@ -697,7 +592,7 @@ void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t p
 
     const uint8_t header[] = {
         0x00, 0x00, 0x01,                       // PES start code prefix
-        0xC0,                                   // Stream ID: 0xC0 = audio stream 0
+        stream_id,                              // 0xC0 = audio stream 0, 0xBD = private stream 1
         static_cast<uint8_t>(pes_len >> 8), static_cast<uint8_t>(pes_len),
         0x80,   // '10' + scrambling(2) + priority(1) + alignment(1) + copyright(1) + original(1)
         0x80,   // PTS_DTS_flags(2)=10 + other flags
@@ -861,6 +756,8 @@ void TsMuxer::feedAudioFrame(uint16_t sid, const uint8_t* data, size_t len, int6
 }
 
 void TsMuxer::tick(int64_t pts) {
+    outputRadioTexts(pts);
+
     // Time-based PSI output (DVB compliant: PAT/PMT every 500ms, SDT every 2s)
     // Track maximum PTS seen to handle multi-service streams where each service has different PTS
     if (pts > last_psi_pts_) {

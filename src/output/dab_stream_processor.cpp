@@ -218,7 +218,7 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
     muxer_configured_ = true;
 }
 
-// the dynamic label of a service: as its now playing
+// the dynamic label of a service: as RDS RadioText with its audio
 void DabStreamProcessor::onLabel(uint8_t subchannel_id, const std::string& text) {
     auto it = subch_to_sid_.find(subchannel_id);
     if (it == subch_to_sid_.end()) return;
@@ -228,7 +228,7 @@ void DabStreamProcessor::onLabel(uint8_t subchannel_id, const std::string& text)
         LOG_DEBUG(DABPLUS, "dynamic label of service 0x" << std::hex << it->second << std::dec << ": \""
                   << text << "\"");
     }
-    muxer_.setNowPlaying(it->second, text);
+    muxer_.setRadioText(it->second, text);
 }
 
 void DabStreamProcessor::onDLPlus(uint8_t subchannel_id, const std::string& text,

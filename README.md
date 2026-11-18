@@ -55,8 +55,14 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 
 - **MPEG-TS Output**
   - Custom TS muxer (no FFmpeg dependency)
-  - Full DVB SI: PAT, PMT, SDT, EIT (present/following + schedule)
-  - Deterministic PID allocation based on subchannel ID
+  - DVB SI: PAT, PMT, SDT, EIT schedule (from EHB/SPI)
+  - Deterministic PID allocation based on subchannel ID: PMT 0x100, audio
+    0x1000, RDS 0x1100 (each + subchannel ID)
+  - The dynamic label of each service as RDS RadioText, as DVB radio carries
+    it: UECP frames in a stream of type 0x89 with an ancillary_data_descriptor
+    ("RDS via UECP"), on a change and then every 3 s. tvheadend passes it on
+    as "RDS", Kodi shows it. RadioText has at most 64 characters: a longer
+    label is cut at a word. The programme guide (EIT schedule) stays apart.
 
 - **EPG Support**
   - EHB (ETSI TS 102 371) schedule parsing

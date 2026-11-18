@@ -329,6 +329,7 @@ static void add_missing_services(dvbdab_streamer* s, const DABEnsemble& ensemble
         cs.sid = static_cast<uint16_t>(svc.sid);
         cs.pmt_pid = 0x0100 + svc.subchannel_id;
         cs.audio_pid = 0x1000 + svc.subchannel_id;
+        cs.rds_pid = 0x1100 + svc.subchannel_id;
         cs.name = svc.label;
         cs.provider = ensemble.label;
         cs.dabplus = svc.dabplus;

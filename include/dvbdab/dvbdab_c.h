@@ -185,6 +185,9 @@ typedef enum {
 #define DVBDAB_AAC_TRANSCODE  2
 /* the streamer has dvbdab_streamer_set_wanted_pids() (2.2.0 on) */
 #define DVBDAB_HAVE_WANTED_PIDS 1
+/* the TS has the dynamic label of each service as RDS RadioText (stream type
+ * 0x89, UECP; PID 0x1100 + subchannel ID) (2.3.0 on) */
+#define DVBDAB_HAVE_RDS 1
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
