@@ -11,6 +11,8 @@ PF_Reassembler::PF_Reassembler() {
 void PF_Reassembler::reset() {
     collectors_.clear();
     af_buffer_.clear();
+    newest_pseq_ = -1;
+    plen_ = 0;
 }
 
 void PF_Reassembler::cleanup_old_collectors() {
@@ -87,6 +89,14 @@ const uint8_t* PF_Reassembler::add_fragment(const PF_Header& hdr, const uint8_t*
     if (len < hdr_size + hdr.plen) return nullptr;
 
     const uint8_t* payload = pkt + hdr_size;
+
+    // the latest sequence number (a later one is 1..32767 on, modulo 65536)
+    if (newest_pseq_ < 0 || ((hdr.pseq - newest_pseq_) & 0xFFFF) - 1 < 32767) {
+        newest_pseq_ = hdr.pseq;
+    }
+    if (!hdr.fec && hdr.findex + 1 < hdr.fcount) {
+        plen_ = hdr.plen;
+    }
 
     // Get or create collector for this pseq
     PF_Collector& c = collectors_[hdr.pseq];
@@ -173,6 +183,37 @@ const uint8_t* PF_Reassembler::add_fragment(const PF_Header& hdr, const uint8_t*
 
     af_len = af_buffer_.size();
     return af_buffer_.data();
+}
+
+bool PF_Reassembler::take_partial(PF_Partial& out) {
+    cleanup_old_collectors();
+    for (auto& [pseq, c] : collectors_) {
+        if (c.processed || c.fragments_collected == 0 || newest_pseq_ < 0) continue;
+        uint16_t age = (newest_pseq_ - pseq) & 0xFFFF;
+        if (age < 1 || age >= 32768) continue;
+        // done with it, used or not: it stays incomplete; collectors that are
+        // not done never go (cleanup_old_collectors), and one with the same
+        // number 65536 AFs later would take its old fragments
+        c.processed = true;
+        if (c.fec) continue;
+        // the fragments but the last are plen bytes: from this AF, or the last one
+        size_t plen = 0;
+        for (const auto& [i, f] : c.fragments)
+            if (i + 1 < c.fcount) plen = f.size();
+        if (plen == 0) plen = plen_;
+        if (plen == 0 || c.fcount == 0) continue;
+        out.pseq = pseq;
+        out.data.assign(c.fcount * plen, 0);
+        out.valid.clear();
+        for (const auto& [i, f] : c.fragments) {
+            size_t at = i * plen;
+            if (i >= c.fcount || f.size() > plen || at + f.size() > out.data.size()) continue;
+            std::copy(f.begin(), f.end(), out.data.begin() + at);
+            out.valid.emplace_back(at, at + f.size());
+        }
+        if (!out.valid.empty()) return true;
+    }
+    return false;
 }
 
 } // namespace dvbdab

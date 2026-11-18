@@ -61,6 +61,14 @@ using EtiFrameCallback = std::function<void(const StreamKey& stream,
                                              const uint8_t* frame, size_t len,
                                              uint16_t dflc)>;
 
+// The same, also for frames from EDI packets of which fragments were lost:
+// invalid_scids has the bit of each subchannel (SCID 0..63) whose data did not
+// come (its bytes in the frame are zero). EtiFrameCallback only gets frames
+// without such.
+using EtiFrameExCallback = std::function<void(const StreamKey& stream,
+                                               const uint8_t* frame, size_t len,
+                                               uint16_t dflc, uint64_t invalid_scids)>;
+
 // Subchannel data callback (raw MSC data for a service)
 using SubchannelCallback = std::function<void(const StreamKey& stream,
                                                uint8_t subchannel_id,

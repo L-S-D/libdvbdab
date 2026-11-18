@@ -20,6 +20,14 @@ void DABStreamParser::reset() {
     fic_parser_.reset();
     edi_ = EDI_Builder{};
     last_af_seq_ = 0;
+    layout_.clear();
+    layout_len_ = 0;
+    last_stc_ = {};
+    cur_pseq_ = -1;
+    last_pseq_ = -1;
+    last_dflc_ = 0;
+    last_out_pseq_ = -1;
+    partial_af_count_ = 0;
 }
 
 uint16_t DABStreamParser::crc16(const uint8_t* data, size_t len) {
@@ -123,12 +131,27 @@ int DABStreamParser::handle_pf_packet(const uint8_t* pkt, size_t len) {
     size_t af_len = 0;
     const uint8_t* af_data = pf_reassembler_.add_fragment(hdr, pkt, len, af_len);
 
+    // The AFs before it that stay incomplete: what came of them (they are
+    // older, their frames go out first)
+    PF_Partial part;
+    while (pf_reassembler_.take_partial(part)) {
+        handle_partial_af(part);
+    }
+
     if (af_data && af_len > 0) {
         af_assembled_count_++;
         if (af_assembled_count_ <= 5 || af_assembled_count_ % 100 == 0) {
             LOG_DEBUG(STREAM, "PF reassembled AF packet #" << af_assembled_count_ << " len=" << af_len);
         }
+        if (!pseq_in_order(hdr.pseq)) {
+            return 0;
+        }
+        cur_pseq_ = hdr.pseq;
         int ret = handle_af_packet(af_data, af_len);
+        cur_pseq_ = -1;
+        if (ret > 0) {
+            last_out_pseq_ = hdr.pseq;
+        }
         return ret;
     }
 
@@ -175,7 +198,21 @@ int DABStreamParser::handle_af_packet(const uint8_t* pkt, size_t len) {
         }
     }
 
-    decode_tagpacket(pkt + AFPACKET_HEADER_LEN, taglength);
+    // Its TAG items: the layout for incomplete AFs (from PF packets) after it
+    std::vector<TagPos> layout;
+    decode_tagpacket(pkt + AFPACKET_HEADER_LEN, taglength, &layout);
+    if (cur_pseq_ >= 0 && edi_.is_eti && edi_.m_fc_valid) {
+        layout_ = std::move(layout);
+        layout_len_ = total_len;
+        for (int n = 0; n < 64; n++) {
+            last_stc_[n].scid = edi_.m_stc[n].scid;
+            last_stc_[n].sad = edi_.m_stc[n].sad;
+            last_stc_[n].tpl = edi_.m_stc[n].tpl;
+            last_stc_[n].size = edi_.m_stc[n].mst.size();
+        }
+        last_pseq_ = cur_pseq_;
+        last_dflc_ = edi_.m_fc.dflc;
+    }
 
     if (af_process_count_ <= 5) {
         LOG_DEBUG(STREAM, "AF is_eti=" << edi_.is_eti << " fc_valid=" << edi_.m_fc_valid
@@ -187,6 +224,10 @@ int DABStreamParser::handle_af_packet(const uint8_t* pkt, size_t len) {
 }
 
 bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize) {
+    return decode_tagpacket(pkt, tagsize, nullptr);
+}
+
+bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::vector<TagPos>* layout) {
     tagpkt_count_++;
     edi_.m_fc.nst = 0;
     int tag_count_local = 0;
@@ -219,6 +260,11 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize) {
         uint32_t taglen = taglen_bits / 8;
 
         const uint8_t* val = pkt + i + 8;
+        if (i + 8 + taglen > tagsize) break;
+        if (layout) {
+            // the value in the AF packet: after its 10 byte header
+            layout->push_back({tagId, 10 + i + 8, taglen});
+        }
 
         if (tagId == 0x2a707472) {  // "*ptr"
             decode_starptr(val, taglen);
@@ -310,6 +356,10 @@ bool DABStreamParser::decode_estn(const uint8_t* value, size_t len, uint8_t n) {
 }
 
 bool DABStreamParser::assemble_eti_frame() {
+    return assemble_eti_frame(false, 0, true);
+}
+
+bool DABStreamParser::assemble_eti_frame(bool partial, uint64_t invalid_scids, bool fic_fresh) {
     if (!edi_.is_eti || !edi_.m_fc_valid || !edi_.fic_length) {
         LOG_DEBUG(STREAM, "assemble_eti skip: is_eti=" << edi_.is_eti
                  << " fc_valid=" << edi_.m_fc_valid << " fic_len=" << (int)edi_.fic_length);
@@ -407,16 +457,90 @@ bool DABStreamParser::assemble_eti_frame() {
     eti[idx + 7] = edi_.m_fc.tsta & 0xFF;
     idx += 8;
 
-    // Feed to FIC parser
-    fic_parser_.process_eti_frame(eti, ETI_NI_RAW_SIZE);
+    // Feed to FIC parser (not the FIC of an earlier frame again)
+    if (fic_fresh) {
+        fic_parser_.process_eti_frame(eti, ETI_NI_RAW_SIZE);
+    }
 
     // Emit ETI frame to callback
-    if (eti_callback_) {
-        StreamKey key{target_ip_, target_port_};
+    StreamKey key{target_ip_, target_port_};
+    if (eti_callback_ && !partial) {
         eti_callback_(key, eti, ETI_NI_RAW_SIZE, edi_.m_fc.dflc);
+    }
+    if (eti_ex_callback_) {
+        eti_ex_callback_(key, eti, ETI_NI_RAW_SIZE, edi_.m_fc.dflc, invalid_scids);
     }
 
     return true;
+}
+
+bool DABStreamParser::pseq_in_order(int32_t pseq) const {
+    uint16_t d = static_cast<uint16_t>(pseq - last_out_pseq_);
+    return last_out_pseq_ < 0 || (d != 0 && d < 32768);
+}
+
+// An AF packet of which fragments did not come: with the TAG items of the
+// last complete one (the layout of an ensemble stays as long as its
+// configuration), the ones whose bytes came are decoded; a subchannel whose
+// data did not come is marked invalid, without the DETI the frame counter
+// follows from the PF sequence number. TAG heads that came must be those of
+// the layout, the AF header the same length.
+void DABStreamParser::handle_partial_af(const PF_Partial& part) {
+    if (layout_.empty() || last_pseq_ < 0 || part.data.size() < layout_len_ ||
+        !pseq_in_order(part.pseq)) {
+        return;
+    }
+    const uint8_t* af = part.data.data();
+    if (part.covers(0, 10) &&
+        (af[0] != 'A' || af[1] != 'F' ||
+         10 + read_be32(af + 2) + (((af[8] >> 7) & 1) ? 2u : 0u) != layout_len_)) {
+        return;
+    }
+    for (const auto& t : layout_) {
+        if (part.covers(t.off - 8, t.off) &&
+            (read_be32(af + t.off - 8) != t.id || read_be32(af + t.off - 4) != t.len * 8)) {
+            return;
+        }
+    }
+
+    uint64_t invalid = 0;
+    bool deti = false;
+    edi_.m_fc.nst = 0;
+    for (const auto& t : layout_) {
+        bool came = part.covers(t.off, t.off + t.len);
+        if (t.id == 0x2a707472) {  // "*ptr"
+            if (came) decode_starptr(af + t.off, t.len);
+        } else if (t.id == 0x64657469) {  // "deti"
+            if (came) deti = decode_deti(af + t.off, t.len);
+        } else if ((t.id & 0xFFFFFF00) == 0x65737400) {  // "est?"
+            uint8_t n = t.id & 0xFF;
+            if (n == 0 || n > 64) continue;
+            if (came) {
+                decode_estn(af + t.off, t.len, n);
+                continue;
+            }
+            const StcInfo& ls = last_stc_[n - 1];
+            EDI_STC& stc = edi_.m_stc[n - 1];
+            stc.stream_index = n - 1;
+            stc.scid = ls.scid;
+            stc.sad = ls.sad;
+            stc.tpl = ls.tpl;
+            stc.mst.assign(ls.size, 0);
+            edi_.m_fc.nst++;
+            invalid |= uint64_t(1) << (ls.scid & 63);
+        }
+    }
+    if (deti) {
+        last_pseq_ = part.pseq;
+        last_dflc_ = edi_.m_fc.dflc;
+    } else {
+        uint16_t d = static_cast<uint16_t>(part.pseq - last_pseq_);
+        edi_.m_fc.dflc = (last_dflc_ + d) % 5000;
+    }
+    partial_af_count_++;
+    if (assemble_eti_frame(true, invalid, deti)) {
+        last_out_pseq_ = part.pseq;
+    }
 }
 
 const DABEnsemble& DABStreamParser::get_ensemble() const {

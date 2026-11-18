@@ -379,10 +379,12 @@ static void auto_start_services_if_ready(dvbdab_streamer* s) {
 // Shared ETI frame processing - used by all input formats (ETI-NA, IPv4, TSNI)
 // All formats produce ETI frames that are processed identically here
 // Called via eti_callback from EnsembleManager
-static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t len) {
+static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t len,
+                              uint64_t invalid_scids) {
     if (!s->processor_initialized || !s->processor) return;
-    // Feed to unified processor - handles audio + EPG + TS muxing
-    s->processor->feedEtiFrame(eti_ni, len);
+    // Feed to unified processor - handles audio + EPG + TS muxing; the
+    // subchannels in invalid_scids did not come in this frame
+    s->processor->feedEtiFrame(eti_ni, len, invalid_scids);
 }
 
 extern "C" { // Resume C API
@@ -437,9 +439,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             });
 
             // ETI callback from EnsembleManager -> shared ETI processing for audio
-            s->manager->setEtiCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t) {
+            s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
+                                          uint64_t invalid_scids) {
                 if (key.ip != static_cast<uint32_t>(s->config.pid) || key.port != 0) return;
-                process_eti_frame(s, data, len);
+                process_eti_frame(s, data, len, invalid_scids);
             });
             break;
 
@@ -487,9 +490,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             });
 
             // ETI callback from EnsembleManager -> shared ETI processing
-            s->manager->setEtiCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t) {
+            s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
+                                          uint64_t invalid_scids) {
                 if (key.ip != s->config.filter_ip || key.port != s->config.filter_port) return;
-                process_eti_frame(s, data, len);
+                process_eti_frame(s, data, len, invalid_scids);
             });
             break;
 
@@ -528,9 +532,10 @@ dvbdab_streamer_t *dvbdab_streamer_create(const dvbdab_streamer_config_t *config
             });
 
             // ETI callback from EnsembleManager -> shared ETI processing for audio
-            s->manager->setEtiCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t) {
+            s->manager->setEtiExCallback([s](const StreamKey& key, const uint8_t* data, size_t len, uint16_t,
+                                          uint64_t invalid_scids) {
                 if (key.ip != static_cast<uint32_t>(s->config.pid) || key.port != 0) return;
-                process_eti_frame(s, data, len);
+                process_eti_frame(s, data, len, invalid_scids);
             });
             break;
 

@@ -48,6 +48,12 @@ public:
         eti_callback_ = std::move(callback);
     }
 
+    // Set callback for ETI frames, also those from EDI packets with lost
+    // fragments (see EtiFrameExCallback; optional)
+    void setEtiExCallback(EtiFrameExCallback callback) {
+        eti_ex_callback_ = std::move(callback);
+    }
+
     // Set callback for subchannel mapping changes (for dynamic PMT updates)
     void setSubchannelChangeCallback(SubchannelChangeCallback callback) {
         subchannel_change_callback_ = std::move(callback);
@@ -97,6 +103,7 @@ private:
     EnsembleBasicReadyCallback basic_ready_callback_;
     EnsembleCompleteCallback complete_callback_;
     EtiFrameCallback eti_callback_;
+    EtiFrameExCallback eti_ex_callback_;
     SubchannelChangeCallback subchannel_change_callback_;
 
     // Track previous subchannel mappings for change detection

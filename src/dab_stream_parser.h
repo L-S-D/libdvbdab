@@ -116,17 +116,37 @@ public:
     // Set callback for ETI frames
     void setEtiCallback(EtiFrameCallback cb) { eti_callback_ = std::move(cb); }
 
+    // Set callback for ETI frames, also those from EDI packets with lost
+    // fragments: the subchannels whose data came are in them, the others are
+    // in invalid_scids (see EtiFrameExCallback)
+    void setEtiExCallback(EtiFrameExCallback cb) { eti_ex_callback_ = std::move(cb); }
+
+    // AF packets made of the fragments that came of incomplete ones
+    int partial_af_count() const { return partial_af_count_; }
+
 private:
+    // The TAG items of the last complete AF packet (offset of the value in the
+    // packet, its length) and its length: an incomplete one is read with it
+    struct TagPos {
+        uint32_t id;
+        size_t off;
+        size_t len;
+    };
     int handle_edi_packet(const uint8_t* pkt, size_t len);
     int handle_af_packet(const uint8_t* pkt, size_t len);
     int handle_pf_packet(const uint8_t* pkt, size_t len);
 
     bool decode_tagpacket(const uint8_t* pkt, size_t len);
+    // the same, recording the TAG items (offsets in the AF packet) into layout
+    bool decode_tagpacket(const uint8_t* pkt, size_t len, std::vector<TagPos>* layout);
     bool decode_starptr(const uint8_t* value, size_t len);
     bool decode_deti(const uint8_t* value, size_t len);
     bool decode_estn(const uint8_t* value, size_t len, uint8_t n);
 
     bool assemble_eti_frame();
+    // the same for a frame from an incomplete AF packet: invalid_scids, the
+    // subchannels whose data did not come; fic_fresh, whether its FIC came
+    bool assemble_eti_frame(bool partial, uint64_t invalid_scids, bool fic_fresh);
 
     static uint16_t crc16(const uint8_t* data, size_t len);
     bool check_crc(const uint8_t* data, size_t len);
@@ -154,6 +174,29 @@ private:
 
     std::array<uint8_t, ETI_NI_RAW_SIZE> eti_frame_{};
     EtiFrameCallback eti_callback_;
+    EtiFrameExCallback eti_ex_callback_;
+
+    std::vector<TagPos> layout_;
+    size_t layout_len_ = 0;
+    struct StcInfo {
+        uint8_t scid = 0;
+        uint16_t sad = 0;
+        uint8_t tpl = 0;
+        size_t size = 0;
+    };
+    std::array<StcInfo, 64> last_stc_{};
+    // The PF sequence number of the AF being decoded (from a PF packet);
+    // the last one with a frame counter (DETI), its counter; the last one
+    // that went out as a frame
+    int32_t cur_pseq_ = -1;
+    int32_t last_pseq_ = -1;
+    uint16_t last_dflc_ = 0;
+    int32_t last_out_pseq_ = -1;
+    int partial_af_count_ = 0;
+
+    // an AF packet of PF sequence number pseq that comes after the last one out
+    bool pseq_in_order(int32_t pseq) const;
+    void handle_partial_af(const PF_Partial& part);
 };
 
 } // namespace dvbdab

@@ -36,6 +36,21 @@ struct PF_Collector {
     std::map<uint32_t, std::vector<uint8_t>> fragments;  // findex -> data
 };
 
+// An AF of which fragments did not come (no FEC): the bytes of the ones that
+// came at their place, the others zero
+struct PF_Partial {
+    uint16_t pseq = 0;
+    std::vector<uint8_t> data;
+    std::vector<std::pair<size_t, size_t>> valid;   // [begin, end) that came
+
+    // whether the bytes [begin, end) came
+    bool covers(size_t begin, size_t end) const {
+        for (const auto& r : valid)
+            if (r.first <= begin && end <= r.second) return true;
+        return false;
+    }
+};
+
 // PF fragment reassembly manager
 class PF_Reassembler {
 public:
@@ -48,7 +63,15 @@ public:
     // Add a fragment, returns complete AF packet data if all fragments received
     const uint8_t* add_fragment(const PF_Header& hdr, const uint8_t* pkt, size_t len, size_t& af_len);
 
+    // After add_fragment(): an older AF that stays incomplete (a fragment of a
+    // later one came: the fragments of an AF come one after the other), as far
+    // as it came; it is done then. false: none (any more). Only AFs without FEC.
+    bool take_partial(PF_Partial& out);
+
 private:
+    int32_t newest_pseq_ = -1;   // the latest sequence number seen
+    uint16_t plen_ = 0;          // payload length of a fragment but the last
+
     std::map<uint16_t, PF_Collector> collectors_;
     std::vector<uint8_t> af_buffer_;
 

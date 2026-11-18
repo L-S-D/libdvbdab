@@ -5,9 +5,24 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 ## Features
 
 - **DAB/DAB+ Audio Decoding**
-  - DAB+ (HE-AAC v2) superframe decoding with Reed-Solomon error correction
+  - DAB+ (HE-AAC v2) superframe decoding: FireCode sync, AU CRC check (no
+    Reed-Solomon correction)
   - DAB (MPEG-1 Layer II) frame extraction
   - DLS (Dynamic Label Segment) extraction for now-playing info
+
+- **Lost frames**
+  - The frame counter of the ETI frames (FCT) tells lost frames. A DAB+
+    superframe keeps its frames at their place: of one with lost frames the AUs
+    before the first lost one are still put out (with their CRC; SBR codes its
+    envelopes relative to the AU before, the rest waits for the next
+    superframe), one without its first frame (the header) is lost.
+  - The PTS keep the time line: lost AUs and MP2 frames leave a gap.
+  - EDI without PFT FEC: of an AF packet with lost PF fragments the
+    subchannels whose bytes came are still taken (the TAG items of the last
+    complete AF packet locate them); the others are marked
+    (`EtiFrameExCallback`), the C API streamer uses it.
+  - DAB+ AUs are 960-sample frames; the ADTS output cannot say so, decoders
+    take 1024 samples per AU, and so do the PTS.
 
 - **Multiple Input Formats**
   | Format | Description | Source |

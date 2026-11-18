@@ -33,6 +33,12 @@ DABStreamParser& EnsembleManager::getParser(const StreamKey& key) {
             eti_callback_(key, data, len, dflc);
         }
     });
+    parser->setEtiExCallback([this](const StreamKey& key, const uint8_t* data, size_t len,
+                                    uint16_t dflc, uint64_t invalid_scids) {
+        if (eti_ex_callback_) {
+            eti_ex_callback_(key, data, len, dflc, invalid_scids);
+        }
+    });
 
     auto& ref = *parser;
     parsers_[key] = std::move(parser);
@@ -214,6 +220,9 @@ void EnsembleManager::processEtiFrame(uint16_t pid, const uint8_t* eti_ni, size_
     // THEN fire ETI callback (muxer_initialized will be true on the frame basic_ready becomes true)
     if (eti_callback_) {
         eti_callback_(key, eti_ni, len, 0);
+    }
+    if (eti_ex_callback_) {
+        eti_ex_callback_(key, eti_ni, len, 0, 0);
     }
 
     // Check for complete
