@@ -230,8 +230,24 @@ bool DabPlusDecoder::feedFrame(const uint8_t* data, size_t len, int64_t frame_no
     }
 
     if (len != frame_size_) {
-        return false;
+        // One frame of another size is a damaged header; ten in a row are
+        // the subchannel after a reconfiguration (or the size taken from a
+        // damaged first frame): go on with that size
+        if (len != other_size_) {
+            other_size_ = len;
+            other_count_ = 0;
+        }
+        if (++other_count_ < 10) {
+            return false;
+        }
+        LOG_DEBUG(DABPLUS, "frame size " << frame_size_ << " -> " << len);
+        frame_size_ = len;
+        bitrate_ = static_cast<int>(len / 3);
+        superframe_buf_.assign(frame_size_ * 5, 0);
+        synced_ = false;
+        sf_mask_ = 0;
     }
+    other_count_ = 0;
 
     frame_count_++;
     next_frame_ = frame_no + 1;

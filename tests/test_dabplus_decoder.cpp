@@ -17,13 +17,13 @@ static void check(bool ok, const char* what) {
     if (!ok) failures++;
 }
 
-// A superframe of a 24 kbit/s subchannel (72 bytes per frame): 48 kHz with
-// SBR, so 3 AUs; their bytes are `fill`, their CRCs right
-static std::vector<uint8_t> superframe(uint8_t fill) {
-    const size_t fs = 72, audio = fs * 5 - (24 / 8) * 10;  // without the RS parity
+// A superframe of a subchannel of 24 kbit/s (72 bytes per frame) or more: 48
+// kHz with SBR, so 3 AUs; their bytes are `fill`, their CRCs right
+static std::vector<uint8_t> superframe(uint8_t fill, size_t fs = 72) {
+    const size_t audio = fs * 5 - (fs / 3 / 8) * 10;  // without the RS parity
     std::vector<uint8_t> sf(fs * 5, 0);
     sf[2] = 0x60;                                // dac_rate, sbr_flag: 3 AUs
-    const size_t start[4] = {6, 114, 222, audio};
+    const size_t start[4] = {6, 6 + (audio - 6) / 3, 6 + (audio - 6) * 2 / 3, audio};
     // au_start of AU 2 and 3: 12 bits each from bit 24
     sf[3] = start[1] >> 4;
     sf[4] = static_cast<uint8_t>((start[1] & 0x0F) << 4 | (start[2] >> 8));
@@ -88,6 +88,24 @@ int main() {
         for (int s = 0; s < 4; s++)
             for (int f = 0; f < 5; f++) d.feedFrame(sf.data() + f * 72, 72, fn++);
         check(aus == 12, "and the decoder works with the real size after them");
+    }
+
+    {
+        // the subchannel gets another size (a reconfiguration of the ensemble)
+        DabPlusDecoder d(24);
+        size_t aus = 0;
+        d.setTimedCallback([&](const uint8_t*, size_t, int64_t) { aus++; });
+        int64_t fn = 0;
+        for (int s = 0; s < 4; s++) {
+            auto sf = superframe(static_cast<uint8_t>(s + 1));
+            for (int f = 0; f < 5; f++) d.feedFrame(sf.data() + f * 72, 72, fn++);
+        }
+        size_t before = aus;
+        for (int s = 0; s < 10; s++) {
+            auto sf = superframe(static_cast<uint8_t>(s + 1), 96);
+            for (int f = 0; f < 5; f++) d.feedFrame(sf.data() + f * 96, 96, fn++);
+        }
+        check(before == 12 && aus >= before + 18, "after a change of the subchannel size the decoder goes on with the new one");
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);

@@ -137,6 +137,8 @@ private:
     size_t frame_size_;           // Single frame size in bytes
     bool synced_ = false;         // FireCode sync acquired
     int64_t next_frame_ = 0;      // frame number for feedFrame() without one
+    size_t other_size_ = 0;       // frames of another size than frame_size_ in a row:
+    int other_count_ = 0;         //   the subchannel has that size now
     int64_t sf_start_ = 0;        // frame number of the first frame of the superframe
     uint8_t sf_mask_ = 0;         // frames of it collected (bit 0..4)
 
