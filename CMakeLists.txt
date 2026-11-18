@@ -1,7 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 
-# Only set compiler if this is the top-level project
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+# A build of its own (not as part of another project) takes GCC 15 from
+# /usr/local when it is there and no compiler was chosen (-DCMAKE_CXX_COMPILER
+# or CXX in the environment)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT DEFINED CMAKE_CXX_COMPILER
+   AND NOT DEFINED ENV{CXX} AND EXISTS /usr/local/gcc-15/bin/g++)
     set(CMAKE_C_COMPILER /usr/local/gcc-15/bin/gcc)
     set(CMAKE_CXX_COMPILER /usr/local/gcc-15/bin/g++)
 endif()
