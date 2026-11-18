@@ -170,6 +170,9 @@ typedef enum {
 #define DVBDAB_HAVE_FORMAT_IPV4 1
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
 #define DVBDAB_VERSION_MAJOR 2
+/* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
+ * subchannels of EDI packets with lost fragments (2.1.0 on) */
+#define DVBDAB_VERSION_MINOR 1
 
 /* Opaque unified streamer handle - created with dvbdab_streamer_create() */
 typedef struct dvbdab_streamer dvbdab_streamer_t;
