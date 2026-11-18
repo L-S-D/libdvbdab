@@ -47,7 +47,6 @@ int main(int argc, char* argv[]) {
     }, nullptr);
 
     uint8_t buffer[188 * 256];  // 256 TS packets per read
-    size_t total_bytes = 0;
     size_t packets_fed = 0;
     bool printed_basic = false;
     bool printed_complete = false;
@@ -58,7 +57,6 @@ int main(int argc, char* argv[]) {
         size_t bytes_read = fread(buffer, 1, sizeof(buffer), f);
         if (bytes_read == 0) break;
 
-        total_bytes += bytes_read;
         packets_fed += bytes_read / 188;
 
         dvbdab_streamer_feed(streamer, buffer, bytes_read);

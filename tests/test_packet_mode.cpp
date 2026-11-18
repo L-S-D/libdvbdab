@@ -241,7 +241,6 @@ int main(int argc, char* argv[]) {
     // Read and process input
     std::vector<uint8_t> buffer(188 * 1000);
     size_t total_bytes = 0;
-    size_t frames = 0;
 
     std::cout << "Processing...\n\n";
 
@@ -249,7 +248,6 @@ int main(int argc, char* argv[]) {
         size_t bytes_read = infile.gcount();
         source.feed(buffer.data(), bytes_read);
         total_bytes += bytes_read;
-        frames++;
 
         // Show progress every 1MB
         static size_t last_report = 0;
