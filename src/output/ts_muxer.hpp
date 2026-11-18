@@ -284,8 +284,11 @@ private:
     std::map<uint16_t, uint8_t> eit_schedule_version_;
     std::map<uint16_t, bool> schedule_changed_;  // Track if schedule changed since last carousel
     bool eit_carousel_pending_{false};  // True when there are pending changes to apply
-    size_t eit_carousel_interval_{500};  // Output EIT every N audio frames (~12 seconds)
-    size_t frames_since_eit_{0};
+    static constexpr int64_t EIT_INTERVAL_PTS = 10 * 90000;  // the whole schedule every 10 s
+    int64_t last_eit_pts_{-1};
+    static constexpr size_t MAX_SCHEDULES = 256;         // services with a schedule
+    static constexpr size_t MAX_PROGRAMMES = 1024;       // of one service
+    static constexpr time_t SCHEDULE_PAST_SECONDS = 6 * 3600;  // kept after its end
 };
 
 } // namespace dvbdab

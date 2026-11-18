@@ -347,6 +347,12 @@ void TsMuxer::outputSdt() {
 void TsMuxer::updateSchedule(uint16_t service_id, const EpgSchedule& schedule) {
     if (schedule.programmes.empty()) return;
 
+    // The service id comes from a file name in the stream: only so many
+    // schedules are kept (the ones of services this TS has go out)
+    if (service_schedules_.size() >= MAX_SCHEDULES && !service_schedules_.count(service_id)) {
+        return;
+    }
+
     // Merge programmes into existing schedule (EHB sends partial schedules)
     auto& existing = service_schedules_[service_id];
     existing.service_id = schedule.service_id;
@@ -374,6 +380,27 @@ void TsMuxer::updateSchedule(uint16_t service_id, const EpgSchedule& schedule) {
         [](const EpgProgramme& a, const EpgProgramme& b) {
             return a.start_time < b.start_time;
         });
+
+    // What is over goes, or the schedule (and the EIT sent every few seconds)
+    // grows as long as the stream runs. By the clock only when the schedule
+    // is of now (not when a recording of last year is played); the oldest
+    // when there are too many all the same.
+    auto& progs = existing.programmes;
+    size_t drop = 0;
+    time_t now = time(nullptr);
+    if (!progs.empty() && progs.back().start_time > now - SCHEDULE_PAST_SECONDS) {
+        while (drop < progs.size() &&
+               progs[drop].start_time + progs[drop].duration_seconds < now - SCHEDULE_PAST_SECONDS) {
+            drop++;
+        }
+    }
+    if (progs.size() - drop > MAX_PROGRAMMES) {
+        drop = progs.size() - MAX_PROGRAMMES;
+    }
+    if (drop) {
+        progs.erase(progs.begin(), progs.begin() + drop);
+        schedule_changed_[service_id] = true;
+    }
 
     // Adjust "all day" placeholder durations (86400 = 24 hours, mapped from DAB EPG max ~18:12)
     // to end at the start of the next event
@@ -414,7 +441,7 @@ void TsMuxer::outputEitScheduleCarousel() {
     constexpr size_t MAX_SECTION_PAYLOAD = 4000;
 
     for (const auto& [service_id, schedule] : service_schedules_) {
-        if (schedule.programmes.empty()) continue;
+        if (schedule.programmes.empty() || !sid_to_index_.count(service_id)) continue;
 
         // Pack events into sections
         std::vector<std::vector<const EpgProgramme*>> sections;
@@ -512,7 +539,10 @@ std::vector<uint8_t> TsMuxer::buildEitScheduleSection(uint16_t service_id, uint8
         section.push_back((mjd >> 8) & 0xFF);
         section.push_back(mjd & 0xFF);
 
-        struct tm* utc = gmtime(&prog->start_time);
+        // (gmtime() is not for several threads: each ensemble has its own)
+        struct tm utc_tm = {};
+        struct tm* utc = gmtime_r(&prog->start_time, &utc_tm);
+        if (!utc) utc = &utc_tm;
         section.push_back(toBcd(utc->tm_hour));
         section.push_back(toBcd(utc->tm_min));
         section.push_back(toBcd(utc->tm_sec));
@@ -777,9 +807,10 @@ void TsMuxer::tick(int64_t pts) {
         }
     }
 
-    // EIT schedule carousel - output complete table periodically
-    if (++frames_since_eit_ >= eit_carousel_interval_) {
-        frames_since_eit_ = 0;
+    // EIT schedule carousel - output complete table periodically: by the
+    // time of the stream, the same for one service as for forty
+    if (pts > last_eit_pts_ && (last_eit_pts_ < 0 || pts - last_eit_pts_ >= EIT_INTERVAL_PTS)) {
+        last_eit_pts_ = pts;
         outputEitScheduleCarousel();
     }
 }

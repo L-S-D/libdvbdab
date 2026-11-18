@@ -681,6 +681,10 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
 
     return 0;
     } catch (...) {
+        /* what was being worked on is dropped: kept, it would be fed again
+         * with the next call and grow with every call that fails */
+        streamer->ts_buffer.clear();
+        streamer->tsni_frame_buffer.clear();
         return -1;
     }
 }
