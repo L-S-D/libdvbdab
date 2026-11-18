@@ -40,6 +40,9 @@ public:
     // Reset decoder state
     void reset();
 
+    // Frames were lost: drop what is buffered of a frame, find the sync again
+    void resync();
+
     // Get current parameters (valid after first frame)
     const Mp2Params& getParams() const { return params_; }
 

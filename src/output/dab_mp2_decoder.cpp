@@ -76,6 +76,12 @@ void DabMp2Decoder::reset() {
     sync_errors_ = 0;
 }
 
+void DabMp2Decoder::resync() {
+    synced_ = false;
+    sync_offset_ = 0;
+    buffer_.clear();
+}
+
 bool DabMp2Decoder::isSync(const uint8_t* data) {
     // Check for MPEG audio sync word: 11 bits set
     // First byte is 0xFF, second byte starts with 111

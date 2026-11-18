@@ -49,13 +49,18 @@ const std::string& DabPlusDecoder::getDLSText() const {
 }
 
 void DabPlusDecoder::reset() {
-    frame_index_ = 0;
     synced_ = false;
+    next_frame_ = 0;
+    sf_start_ = 0;
+    sf_mask_ = 0;
     superframe_buf_.clear();
     frame_count_ = 0;
     superframe_count_ = 0;
     au_count_ = 0;
     crc_errors_ = 0;
+    aus_lost_ = 0;
+    sf_no_header_ = 0;
+    sync_losses_ = 0;
     if (pad_decoder_) {
         pad_decoder_->reset();
     }
@@ -104,6 +109,26 @@ void DabPlusDecoder::buildAdtsHeader(uint8_t* header, size_t au_len) {
 }
 
 bool DabPlusDecoder::feedFrame(const uint8_t* data, size_t len) {
+    return feedFrame(data, len, next_frame_);
+}
+
+void DabPlusDecoder::storeFrame(const uint8_t* data, int idx) {
+    size_t offset = idx * frame_size_;
+    if (superframe_buf_.size() < frame_size_ * 5) {
+        superframe_buf_.resize(frame_size_ * 5);
+    }
+    std::copy(data, data + frame_size_, superframe_buf_.data() + offset);
+    sf_mask_ |= 1u << idx;
+}
+
+void DabPlusDecoder::finishSuperframe() {
+    if (sf_mask_) {
+        processSuperframe();
+    }
+    sf_mask_ = 0;
+}
+
+bool DabPlusDecoder::feedFrame(const uint8_t* data, size_t len, int64_t frame_no) {
     // Auto-detect frame size from first call
     if (frame_size_ == 0) {
         frame_size_ = len;
@@ -117,48 +142,64 @@ bool DabPlusDecoder::feedFrame(const uint8_t* data, size_t len) {
     }
 
     frame_count_++;
+    next_frame_ = frame_no + 1;
+    bool done = false;
 
-    // Check FireCode on potential first frame of superframe
-    // The first frame of a superframe should pass FireCode CRC check
-    bool fire_ok = checkFireCode(data);
-
-    // If we haven't synced yet, look for FireCode match
-    if (!synced_) {
-        if (fire_ok) {
-            synced_ = true;
-            frame_index_ = 0;
-            if (frame_count_ <= 10) {
-                LOG_DEBUG(DABPLUS, "FireCode SYNC at frame " << frame_count_);
-            }
-        } else {
-            // Keep looking for sync
-            return false;
+    if (synced_) {
+        int64_t idx = frame_no - sf_start_;
+        if (idx < 0) {
+            return false;  // older than the superframe being collected
         }
-    } else if (frame_index_ == 0 && !fire_ok && frame_count_ > 10) {
-        // Lost sync - resync
-        synced_ = false;
-        return false;
+        if (idx >= 5) {
+            // the superframe is over (frames of it were lost), and the ones
+            // after it that are entirely missing
+            finishSuperframe();
+            done = true;
+            sf_start_ += idx / 5 * 5;
+            idx %= 5;
+        }
+        // The first frame of a superframe starts with its header: a FireCode
+        // that does not match there means the alignment is lost
+        if (idx == 0 && !checkFireCode(data)) {
+            synced_ = false;
+            sync_losses_++;
+        } else {
+            storeFrame(data, static_cast<int>(idx));
+        }
     }
 
-    // Accumulate frame
-    size_t offset = frame_index_ * frame_size_;
-    if (superframe_buf_.size() < offset + len) {
-        superframe_buf_.resize(offset + len);
+    // Not synced: look for the header of a superframe (its FireCode)
+    if (!synced_) {
+        if (!checkFireCode(data)) {
+            return done;
+        }
+        synced_ = true;
+        sf_start_ = frame_no;
+        sf_mask_ = 0;
+        storeFrame(data, 0);
+        if (frame_count_ <= 10) {
+            LOG_DEBUG(DABPLUS, "FireCode SYNC at frame " << frame_count_);
+        }
     }
-    std::copy(data, data + len, superframe_buf_.data() + offset);
-    frame_index_++;
 
-    // Process when we have 5 frames
-    if (frame_index_ >= 5) {
-        processSuperframe();
-        frame_index_ = 0;
-        return true;
+    // Complete: process it at once
+    if (sf_mask_ == 0x1f) {
+        finishSuperframe();
+        sf_start_ += 5;
+        done = true;
     }
 
-    return false;
+    return done;
 }
 
 void DabPlusDecoder::processSuperframe() {
+    // Without its first frame there is no header (format, AU positions)
+    if (!(sf_mask_ & 1)) {
+        sf_no_header_++;
+        aus_lost_ += params_.num_aus;
+        return;
+    }
+
     superframe_count_++;
 
     uint8_t* sf = superframe_buf_.data();
@@ -270,13 +311,36 @@ void DabPlusDecoder::processSuperframe() {
         LOG_TRACE(DABPLUS, oss.str());
     }
 
-    // Process each AU
+    // Process each AU. After a lost AU the rest of the superframe is left
+    // out too: SBR codes its envelopes relative to the AU before, a decoder
+    // would take them against the wrong one; the first AU of a superframe
+    // is a safe start again.
+    bool lost_before = false;
     for (int i = 0; i < params_.num_aus; i++) {
+        if (lost_before) {
+            aus_lost_++;
+            continue;
+        }
         if (au_size[i] <= 0 || au_start[i] + au_size[i] < 2 ||
             static_cast<size_t>(au_start[i] + au_size[i]) > audio_super_frame_size) {
             if (superframe_count_ <= 3) {
                 LOG_TRACE(DABPLUS, "AU" << i << " skipped: size=" << au_size[i] << " start=" << au_start[i]);
             }
+            continue;
+        }
+
+        // An AU in a lost frame is lost
+        size_t first_frame = au_start[i] / frame_size_;
+        size_t last_frame = (au_start[i] + au_size[i] - 1) / frame_size_;
+        bool complete = true;
+        for (size_t f = first_frame; f <= last_frame; f++) {
+            if (!(sf_mask_ & (1u << f))) {
+                complete = false;
+            }
+        }
+        if (!complete) {
+            aus_lost_++;
+            lost_before = true;
             continue;
         }
 
@@ -287,6 +351,7 @@ void DabPlusDecoder::processSuperframe() {
         // Check AU CRC
         if (!checkAuCrc(sf + au_start[i], au_size[i])) {
             crc_errors_++;
+            lost_before = true;
             // Restore CRC bytes
             sf[au_start[i] + au_size[i] - 2] ^= 0xff;
             sf[au_start[i] + au_size[i] - 1] ^= 0xff;
@@ -303,10 +368,17 @@ void DabPlusDecoder::processSuperframe() {
         }
 
         // Build ADTS frame and emit
-        if (callback_ && au_data_len > 0 && au_data_len < output_buf_.size() - 7) {
+        if ((callback_ || timed_callback_) && au_data_len > 0 && au_data_len < output_buf_.size() - 7) {
             buildAdtsHeader(output_buf_.data(), au_data_len);
             std::copy(sf + au_start[i], sf + au_start[i] + au_data_len, output_buf_.data() + 7);
-            callback_(output_buf_.data(), au_data_len + 7);
+            if (callback_) {
+                callback_(output_buf_.data(), au_data_len + 7);
+            }
+            if (timed_callback_) {
+                // num_aus slots per superframe of 5 frames
+                timed_callback_(output_buf_.data(), au_data_len + 7,
+                                sf_start_ * params_.num_aus / 5 + i);
+            }
             au_count_++;
             if (au_count_ <= 10) {
                 LOG_TRACE(DABPLUS, "AU emitted #" << au_count_ << " len=" << (au_data_len + 7));

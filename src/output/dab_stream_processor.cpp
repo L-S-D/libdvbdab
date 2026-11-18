@@ -79,7 +79,7 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
         if (dabplus_decoders_.find(subchannel_id) == dabplus_decoders_.end()) {
             auto decoder = std::make_unique<DabPlusDecoder>(svc->bitrate);
 
-            decoder->setCallback([this, subchannel_id](const uint8_t* data, size_t len) {
+            decoder->setTimedCallback([this, subchannel_id](const uint8_t* data, size_t len, int64_t au_slot) {
                 audio_frame_count_++;
                 if (len < 7) return;
 
@@ -94,8 +94,10 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
                     if (sr_idx < 13) sample_rate = adts_rates[sr_idx];
                 }
 
-                int64_t pts = pts_counter_[it->second];
-                pts_counter_[it->second] += (int64_t)1024 * 90000 / sample_rate;
+                // The AU slot on the time line of the subchannel: lost AUs
+                // leave a gap. A slot lasts 1024 samples, the frame length the
+                // ADTS headers stand for.
+                int64_t pts = 90000 + au_slot * ((int64_t)1024 * 90000 / sample_rate);
 
                 muxer_.feedAudioFrame(it->second, data, len, pts);
             });
@@ -184,7 +186,23 @@ void DabStreamProcessor::updateServiceLabel(uint16_t sid, const std::string& nam
 }
 
 void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len) {
+    feedEtiFrame(eti_ni, len, 0);
+}
+
+void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_t invalid_scids) {
     if (len < 12) return;
+
+    // FCT (0..249): the frame number, a gap is a lost frame. The same FCT
+    // again is the same frame again.
+    int fct = eti_ni[4];
+    if (fct >= 250) {
+        frame_no_++;
+    } else if (last_fct_ >= 0) {
+        int d = (fct - last_fct_ + 250) % 250;
+        if (d == 0) return;
+        frame_no_ += d;
+    }
+    if (fct < 250) last_fct_ = fct;
     eti_frame_count_++;
 
     // Parse ETI frame header
@@ -217,15 +235,32 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len) {
 
         if (stream_offset + stream_size > len) break;
 
+        // Not in this frame: lost for its decoder
+        if ((invalid_scids >> scid) & 1) {
+            stream_offset += stream_size;
+            continue;
+        }
+
         if (muxer_configured_) {
             auto dec_it = dabplus_decoders_.find(scid);
             if (dec_it != dabplus_decoders_.end()) {
-                dec_it->second->feedFrame(eti_ni + stream_offset, stream_size);
+                dec_it->second->feedFrame(eti_ni + stream_offset, stream_size, frame_no_);
                 stream_offset += stream_size;
                 continue;
             }
             auto mp2_it = mp2_decoders_.find(scid);
             if (mp2_it != mp2_decoders_.end()) {
+                // Lost frames: their MP2 frames (one per 24 ms frame) are
+                // missing, the next one starts later by that much
+                auto last = mp2_last_frame_.find(scid);
+                if (last != mp2_last_frame_.end() && frame_no_ - last->second > 1) {
+                    mp2_it->second->resync();
+                    auto sid = subch_to_sid_.find(scid);
+                    if (sid != subch_to_sid_.end()) {
+                        pts_counter_[sid->second] += (frame_no_ - last->second - 1) * 2160;
+                    }
+                }
+                mp2_last_frame_[scid] = frame_no_;
                 mp2_it->second->feedFrame(eti_ni + stream_offset, stream_size);
                 stream_offset += stream_size;
                 continue;

@@ -45,6 +45,12 @@ public:
     // Handles audio decoding, EPG extraction, and TS output
     void feedEtiFrame(const uint8_t* eti_ni, size_t len);
 
+    // The same; the subchannels with their bit set in invalid_scids (SCID
+    // 0..63) did not come in this frame (from an incomplete EDI packet): for
+    // them it is a lost frame. The frame counter (FCT) of the ETI header
+    // tells lost frames too: the audio keeps its time line, gaps stay gaps.
+    void feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_t invalid_scids);
+
     // Flush any buffered early schedules to muxer
     void flushEarlySchedules();
 
@@ -95,6 +101,12 @@ private:
     std::vector<TsService> services_;
     std::map<uint8_t, uint16_t> subch_to_sid_;
     std::map<uint16_t, int64_t> pts_counter_;
+
+    // Frame numbers from the FCT of the ETI frames (24 ms each), the last
+    // frame number each MP2 subchannel got
+    int last_fct_{-1};
+    int64_t frame_no_{0};
+    std::map<uint8_t, int64_t> mp2_last_frame_;
 
     // External schedule callback
     std::function<void(const ServiceSchedule&)> external_schedule_callback_;

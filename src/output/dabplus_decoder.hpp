@@ -18,6 +18,11 @@ class PadDecoder;
 // Callback for decoded AAC frames with ADTS headers
 using AacFrameCallback = std::function<void(const uint8_t* data, size_t len)>;
 
+// The same with the position of the AU on the time line of the subchannel:
+// au_slot counts the AUs from frame 0 (num_aus per superframe of 5 frames),
+// lost frames and superframes leave their slots out
+using AacTimedFrameCallback = std::function<void(const uint8_t* data, size_t len, int64_t au_slot)>;
+
 // Forward declare DL Plus types
 struct DLPlusTag;
 
@@ -45,6 +50,9 @@ public:
     // Set callback for decoded AAC frames
     void setCallback(AacFrameCallback cb) { callback_ = std::move(cb); }
 
+    // Set callback for decoded AAC frames with their AU slot (see above)
+    void setTimedCallback(AacTimedFrameCallback cb) { timed_callback_ = std::move(cb); }
+
     // Set callback for DLS text updates
     void setDLSCallback(DLSUpdateCallback cb);
 
@@ -57,6 +65,13 @@ public:
     // Feed one subchannel frame (called 5 times to build superframe)
     // Returns true if a complete superframe was processed
     bool feedFrame(const uint8_t* data, size_t len);
+
+    // The same with the number of the frame (24 ms each, consecutive numbers
+    // for consecutive frames): a gap is a lost frame. The frames go to their
+    // place in the superframe; of a superframe with lost frames the AUs that
+    // came complete (and pass their CRC) are still put out, one without its
+    // first frame (the header) is lost.
+    bool feedFrame(const uint8_t* data, size_t len, int64_t frame_no);
 
     // Reset decoder state
     void reset();
@@ -79,6 +94,9 @@ public:
     size_t getSuperframeCount() const { return superframe_count_; }
     size_t getAuCount() const { return au_count_; }
     size_t getCrcErrors() const { return crc_errors_; }
+    size_t getAusLost() const { return aus_lost_; }               // AUs in lost frames
+    size_t getSuperframesNoHeader() const { return sf_no_header_; } // first frame lost
+    size_t getSyncLosses() const { return sync_losses_; }
 
 private:
     // FireCode CRC check (bytes 0-1 vs bytes 2-10)
@@ -90,19 +108,28 @@ private:
     // Build ADTS header for AAC frame
     void buildAdtsHeader(uint8_t* header, size_t au_len);
 
-    // Process complete superframe (5 frames accumulated)
+    // Process the superframe collected so far (sf_mask_: the frames it has)
     void processSuperframe();
+
+    // Frame idx (0-4) of the superframe being collected
+    void storeFrame(const uint8_t* data, int idx);
+
+    // Process the superframe being collected, if it has a frame
+    void finishSuperframe();
 
     int bitrate_;
     size_t frame_size_;           // Single frame size in bytes
-    int frame_index_ = 0;         // 0-4 for superframe accumulation
     bool synced_ = false;         // FireCode sync acquired
+    int64_t next_frame_ = 0;      // frame number for feedFrame() without one
+    int64_t sf_start_ = 0;        // frame number of the first frame of the superframe
+    uint8_t sf_mask_ = 0;         // frames of it collected (bit 0..4)
 
     // Superframe buffer (5 frames)
     std::vector<uint8_t> superframe_buf_;
 
     DabPlusParams params_{};
     AacFrameCallback callback_;
+    AacTimedFrameCallback timed_callback_;
     DLSUpdateCallback dls_callback_;
     DLPlusUpdateCallback dlplus_callback_;
 
@@ -114,6 +141,9 @@ private:
     size_t superframe_count_ = 0;
     size_t au_count_ = 0;
     size_t crc_errors_ = 0;
+    size_t aus_lost_ = 0;
+    size_t sf_no_header_ = 0;
+    size_t sync_losses_ = 0;
 
     // Output buffer for ADTS frame
     std::array<uint8_t, 2048> output_buf_;
