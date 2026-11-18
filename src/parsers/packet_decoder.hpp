@@ -164,7 +164,21 @@ private:
         int16_t header_last_seg = -1;  // -1 = unknown
         int16_t body_last_seg = -1;    // -1 = unknown
         MOTHeaderInfo header_info;
+        size_t bytes = 0;       // of its segments (with a share per segment)
+        uint64_t touched = 0;   // mot_clock_ at its last segment
     };
+    // Limits for what is collected: the sender must not decide how much
+    // memory a decoder takes. An object with more is dropped, of the objects
+    // being collected the one longest without a segment goes.
+    static constexpr size_t MAX_DATA_GROUP = 8191;            // EN 300 401, 5.3.3
+    static constexpr size_t MAX_MOT_OBJECT = 512 * 1024;
+    static constexpr size_t MAX_MOT_DIRECTORY = 256 * 1024;
+    static constexpr size_t MAX_MOT_OBJECTS = 64;
+    static constexpr size_t MAX_MOT_DIRECTORIES = 8;
+    static constexpr size_t MAX_MOT_DIRECTORY_ENTRIES = 4096;
+    static constexpr size_t SEGMENT_SHARE = 64;               // bookkeeping of a segment
+    uint64_t mot_clock_ = 0;
+    void resetMotObject(MOTObjectAccumulator& obj);
     std::map<uint16_t, MOTObjectAccumulator> mot_objects_;  // transport_id -> accumulator
 
     // MOT Directory entries - headers parsed from directory (type 6)
@@ -175,6 +189,7 @@ private:
     struct DirectoryAccumulator {
         std::map<uint16_t, std::vector<uint8_t>> segments;  // seg_num -> data
         int16_t last_seg = -1;  // -1 = unknown
+        size_t bytes = 0;
     };
     std::map<uint16_t, DirectoryAccumulator> directory_accumulators_;  // directory_tid -> accumulator
 

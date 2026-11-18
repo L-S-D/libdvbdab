@@ -4,7 +4,6 @@
 #include <cstring>
 #include <set>
 #include <vector>
-#include <zlib.h>
 
 namespace dvbdab {
 
@@ -100,7 +99,13 @@ void PacketDecoder::feedSubchannelData(const uint8_t* data, size_t len) {
             hdr.address = addr;
             hdr.command = cmd;
             hdr.useful_data_len = udl;
-            processPacketData(hdr, buf + 3, udl);
+            try {
+                processPacketData(hdr, buf + 3, udl);
+            } catch (const std::exception&) {
+                // this packet is done all the same: the ones after it, and the
+                // subchannels after this one in the frame, must go on
+                dg_buffers_.erase(addr);
+            }
         }
 
         pos += pkt_len;
@@ -340,6 +345,15 @@ bool PacketDecoder::parseMotHeaderCore(const uint8_t* data, size_t len, MOTHeade
     return true;
 }
 
+void PacketDecoder::resetMotObject(MOTObjectAccumulator& obj) {
+    obj.header_segments.clear();
+    obj.body_segments.clear();
+    obj.header_last_seg = -1;
+    obj.body_last_seg = -1;
+    obj.header_info = MOTHeaderInfo();
+    obj.bytes = 0;
+}
+
 void PacketDecoder::tryCompleteMotObject(uint16_t transport_id) {
     auto& obj = mot_objects_[transport_id];
 
@@ -398,11 +412,7 @@ void PacketDecoder::tryCompleteMotObject(uint16_t transport_id) {
         }
 
         // Clear this object to prepare for next version
-        obj.header_segments.clear();
-        obj.body_segments.clear();
-        obj.header_last_seg = -1;
-        obj.body_last_seg = -1;
-        obj.header_info = MOTHeaderInfo();
+        resetMotObject(obj);
     }
 }
 
@@ -449,7 +459,12 @@ void PacketDecoder::processPacketData(const PacketHeader& header, const uint8_t*
         return;
     }
 
-    // Append data
+    // Append data: a data group has a largest size
+    if (buf.data.size() + len > MAX_DATA_GROUP) {
+        buf.in_progress = false;
+        buf.data.clear();
+        return;
+    }
     buf.data.insert(buf.data.end(), data, data + len);
 
     // Update expected CI
@@ -553,6 +568,12 @@ void PacketDecoder::processDataGroup(uint16_t address, const uint8_t* data, size
         dg_callback_(address, header, payload, payload_len);
     }
 
+    // MOT data groups have a CRC (EN 301 234, 5.1): without one, bytes that
+    // only look like a packet would be taken for one
+    if (!header.crc_flag) {
+        return;
+    }
+
     // Handle MOT data groups
     if (header.type == 6) {
         // MOT Directory - contains info about all objects in the carousel
@@ -600,8 +621,6 @@ void PacketDecoder::parseMotDirectory(const uint8_t* data, size_t len) {
     // Byte 6: CarouselPeriod (8 bits)
     // Bytes 7-8: SortedFlag (1 bit) + SegmentSize (13 bits) + DirectoryExtensionFlag (1 bit) + RFU (1 bit)
 
-    uint32_t dir_size = ((data[0] << 22) | (data[1] << 14) | (data[2] << 6) | (data[3] >> 2)) & 0x3FFFFFFF;
-    bool compression_flag = data[3] & 0x01;
     uint16_t num_objects = (data[4] << 8) | data[5];
     bool dir_ext_flag = (data[8] >> 1) & 0x01;
 
@@ -624,52 +643,10 @@ void PacketDecoder::parseMotDirectory(const uint8_t* data, size_t len) {
         entries_offset += 3;
     }
 
-    // Handle decompression if needed
-    std::vector<uint8_t> decompressed_data;
+    // (A compressed directory is not read: the size to make room for would
+    // come from the stream.)
     const uint8_t* entries_data = data;
     size_t entries_len = len;
-
-    if (compression_flag && entries_offset < len) {
-        size_t compressed_len = len - entries_offset;
-        size_t estimated_size = dir_size > 0 ? dir_size + 1000 : compressed_len * 10;
-        decompressed_data.resize(estimated_size);
-
-        z_stream strm = {};
-        if (inflateInit(&strm) == Z_OK) {
-            strm.next_in = const_cast<Bytef*>(data + entries_offset);
-            strm.avail_in = compressed_len;
-            strm.next_out = decompressed_data.data();
-            strm.avail_out = decompressed_data.size();
-            int ret = inflate(&strm, Z_FINISH);
-            if (ret == Z_STREAM_END || strm.total_out > 0) {
-                decompressed_data.resize(strm.total_out);
-                entries_data = decompressed_data.data();
-                entries_len = decompressed_data.size();
-                entries_offset = 0;
-            }
-            inflateEnd(&strm);
-        }
-
-        // Try raw deflate if zlib failed
-        if (entries_data == data) {
-            strm = {};
-            decompressed_data.resize(estimated_size);
-            if (inflateInit2(&strm, -MAX_WBITS) == Z_OK) {
-                strm.next_in = const_cast<Bytef*>(data + entries_offset);
-                strm.avail_in = compressed_len;
-                strm.next_out = decompressed_data.data();
-                strm.avail_out = decompressed_data.size();
-                int ret = inflate(&strm, Z_FINISH);
-                if (ret == Z_STREAM_END || strm.total_out > 0) {
-                    decompressed_data.resize(strm.total_out);
-                    entries_data = decompressed_data.data();
-                    entries_len = decompressed_data.size();
-                    entries_offset = 0;
-                }
-                inflateEnd(&strm);
-            }
-        }
-    }
 
     // Scan for ContentName markers (0xCC) and extract TID from fixed offset before them
     // Entry structure: TID(2) + Info(7) + ContentName(0xCC + len + charset + name)
@@ -709,6 +686,9 @@ void PacketDecoder::parseMotDirectory(const uint8_t* data, size_t len) {
             continue;  // Skip duplicate
         }
 
+        if (mot_directory_entries_.size() >= MAX_MOT_DIRECTORY_ENTRIES) {
+            mot_directory_entries_.clear();
+        }
         MOTHeaderInfo info;
         info.content_name = filename;
         // Extract body_size from header core (bytes 2-5 after TID, 28 bits)
@@ -768,15 +748,26 @@ void PacketDecoder::accumulateMotSegment(uint16_t transport_id, uint8_t dg_type,
                                           const uint8_t* data, size_t len) {
     if (dg_type == 6) {
         // MOT Directory segment - accumulate and reassemble
+        if (directory_accumulators_.size() >= MAX_MOT_DIRECTORIES &&
+            !directory_accumulators_.count(transport_id)) {
+            directory_accumulators_.clear();
+        }
         auto& dir = directory_accumulators_[transport_id];
 
         // Segment 0 starts a new carousel cycle - clear previous data
         if (segment_number == 0) {
             dir.segments.clear();
             dir.last_seg = -1;
+            dir.bytes = 0;
         }
-
         if (dir.segments.find(segment_number) == dir.segments.end()) {
+            if (dir.bytes + len + SEGMENT_SHARE > MAX_MOT_DIRECTORY) {
+                dir.segments.clear();
+                dir.last_seg = -1;
+                dir.bytes = 0;
+                return;
+            }
+            dir.bytes += len + SEGMENT_SHARE;
             dir.segments[segment_number] = std::vector<uint8_t>(data, data + len);
             if (is_last) {
                 dir.last_seg = segment_number;
@@ -817,17 +808,37 @@ void PacketDecoder::accumulateMotSegment(uint16_t transport_id, uint8_t dg_type,
                     // Clear for next carousel cycle
                     dir.segments.clear();
                     dir.last_seg = -1;
+                    dir.bytes = 0;
                 }
             }
         }
         return;
     }
 
+    // A new object when enough are being collected: the one longest without
+    // a segment goes (a file replaced before it was complete, a lost segment)
+    if (mot_objects_.size() >= MAX_MOT_OBJECTS && !mot_objects_.count(transport_id)) {
+        auto oldest = mot_objects_.begin();
+        for (auto it = mot_objects_.begin(); it != mot_objects_.end(); ++it) {
+            if (it->second.touched < oldest->second.touched) oldest = it;
+        }
+        mot_objects_.erase(oldest);
+    }
     auto& obj = mot_objects_[transport_id];
+    obj.touched = ++mot_clock_;
+    // a segment more than an object can have: the object starts anew
+    auto fits = [&]() {
+        if (obj.bytes + len + SEGMENT_SHARE > MAX_MOT_OBJECT) {
+            resetMotObject(obj);
+            return false;
+        }
+        obj.bytes += len + SEGMENT_SHARE;
+        return true;
+    };
 
     if (dg_type == 4) {
         // MOT Body segment - skip 2-byte length prefix
-        if (obj.body_segments.find(segment_number) == obj.body_segments.end()) {
+        if (obj.body_segments.find(segment_number) == obj.body_segments.end() && fits()) {
             if (len > 2) {
                 obj.body_segments[segment_number] = std::vector<uint8_t>(data + 2, data + len);
             } else {
@@ -840,7 +851,7 @@ void PacketDecoder::accumulateMotSegment(uint16_t transport_id, uint8_t dg_type,
         }
     } else if (dg_type == 3) {
         // MOT Header segment (Header Mode) - skip 2-byte length prefix
-        if (obj.header_segments.find(segment_number) == obj.header_segments.end()) {
+        if (obj.header_segments.find(segment_number) == obj.header_segments.end() && fits()) {
             if (len > 2) {
                 obj.header_segments[segment_number] = std::vector<uint8_t>(data + 2, data + len);
             } else {
@@ -908,11 +919,7 @@ void PacketDecoder::checkMotObjectComplete(uint16_t transport_id) {
     }
 
     // Clear this object to prepare for next version
-    obj.header_segments.clear();
-    obj.body_segments.clear();
-    obj.header_last_seg = -1;
-    obj.body_last_seg = -1;
-    obj.header_info = MOTHeaderInfo();
+    resetMotObject(obj);
 }
 
 } // namespace dvbdab

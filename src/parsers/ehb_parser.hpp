@@ -93,6 +93,15 @@ private:
     // String table (index -> string)
     std::map<uint8_t, std::string> string_table_;
 
+    // Limits: a file must not grow into much more than it is by its tokens
+    // (a token of 32 KB in strings of nothing but token bytes)
+    static constexpr size_t MAX_FILE = 1024 * 1024;
+    static constexpr size_t MAX_TOKEN = 1024;
+    static constexpr size_t MAX_TEXT = 8192;              // one string, expanded
+    static constexpr size_t MAX_EXPANDED = 4 * 1024 * 1024;   // all strings of a file
+    static constexpr size_t MAX_EVENTS = 4096;
+    size_t expanded_ = 0;
+
     // Last parsed schedule
     ServiceSchedule last_schedule_;
 

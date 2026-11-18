@@ -354,8 +354,18 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
             }
         }
 
+        // The subchannel of an audio service that is not started carries no
+        // packets: its bytes would only now and then look like one
+        if (subch_to_sid_.count(scid)) {
+            if (data_subchannels_.erase(scid)) {
+                epg_decoders_.erase(scid);
+            }
+            stream_offset += stream_size;
+            continue;
+        }
+
         // Process data subchannels for EPG accumulation
-        if (data_subchannels_.insert(scid).second) {
+        if (epg_decoders_.size() < MAX_DATA_SUBCHANNELS && data_subchannels_.insert(scid).second) {
             auto decoder = std::make_unique<PacketDecoder>();
 
             // Wire to EHB parser for EPG files

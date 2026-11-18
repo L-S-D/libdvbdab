@@ -157,8 +157,9 @@ bool EhbParser::parseStringTable(const uint8_t* data, size_t len, size_t& end_of
 
         if (pos + header_len + length > len) break;
 
-        // Store string if valid token index (1-19)
-        if (tag >= 1 && tag <= 19) {
+        // Store string if valid token index (1-19); a token stands for a
+        // short string
+        if (tag >= 1 && tag <= 19 && length <= MAX_TOKEN) {
             std::string s(reinterpret_cast<const char*>(data + pos + header_len), length);
             string_table_[tag] = s;
         }
@@ -172,6 +173,8 @@ bool EhbParser::parseStringTable(const uint8_t* data, size_t len, size_t& end_of
 
 std::string EhbParser::decodeTokenString(const uint8_t* data, size_t len) {
     std::string result;
+    if (expanded_ > MAX_EXPANDED) return result;
+    len = std::min(len, MAX_TEXT);
     result.reserve(len * 2);
 
     for (size_t i = 0; i < len; i++) {
@@ -180,7 +183,7 @@ std::string EhbParser::decodeTokenString(const uint8_t* data, size_t len) {
         if (isTokenByte(byte)) {
             // Token reference - look up in string table
             auto it = string_table_.find(byte);
-            if (it != string_table_.end()) {
+            if (it != string_table_.end() && result.size() + it->second.size() <= MAX_TEXT) {
                 result += it->second;
             }
             // If not found, skip silently
@@ -193,17 +196,20 @@ std::string EhbParser::decodeTokenString(const uint8_t* data, size_t len) {
         }
     }
 
+    expanded_ += result.size();
     return result;
 }
 
 std::string EhbParser::expandTokens(const std::string& text) {
     std::string result;
-    result.reserve(text.size() * 2);
+    if (expanded_ > MAX_EXPANDED) return result;
+    result.reserve(std::min(text.size(), MAX_TEXT) * 2);
 
     for (unsigned char c : text) {
+        if (result.size() >= MAX_TEXT) break;
         if (isTokenByte(c)) {
             auto it = string_table_.find(c);
-            if (it != string_table_.end()) {
+            if (it != string_table_.end() && result.size() + it->second.size() <= MAX_TEXT) {
                 result += it->second;
             }
         } else if (c != 0x00) {
@@ -211,6 +217,7 @@ std::string EhbParser::expandTokens(const std::string& text) {
             result += static_cast<char>(c);
         }
     }
+    expanded_ += result.size();
     return result;
 }
 
@@ -261,8 +268,9 @@ void EhbParser::parseTimePoint(const uint8_t* data, size_t len, time_t& result) 
 bool EhbParser::parse(const std::string& filename, const uint8_t* data, size_t len) {
     last_schedule_ = ServiceSchedule();
     string_table_.clear();
+    expanded_ = 0;
 
-    if (len < 4) return false;
+    if (len < 4 || len > MAX_FILE) return false;
 
     // Parse filename for date and service ID
     time_t base_date = 0;
@@ -359,21 +367,6 @@ bool EhbParser::parseEtsiFormat(const std::string& filename, const uint8_t* data
 
     // Invoke callback
     if (schedule_callback_ && !last_schedule_.events.empty()) {
-        // Debug: print actual coverage (earliest start to latest end)
-        time_t min_start = last_schedule_.events[0].start_time;
-        time_t max_end = min_start + last_schedule_.events[0].duration_seconds;
-        for (const auto& ev : last_schedule_.events) {
-            if (ev.start_time < min_start) min_start = ev.start_time;
-            time_t ev_end = ev.start_time + ev.duration_seconds;
-            if (ev_end > max_end) max_end = ev_end;
-        }
-        struct tm* min_tm = gmtime(&min_start);
-        int min_day = min_tm->tm_mday, min_hour = min_tm->tm_hour, min_min = min_tm->tm_min;
-        struct tm* max_tm = gmtime(&max_end);
-        int max_day = max_tm->tm_mday, max_hour = max_tm->tm_hour, max_min = max_tm->tm_min;
-        fprintf(stderr, "[EHB-RANGE] SID=0x%04x events=%zu coverage=day%02d/%02d:%02d-day%02d/%02d:%02d\n",
-                last_schedule_.service_id, last_schedule_.events.size(),
-                min_day, min_hour, min_min, max_day, max_hour, max_min);
         schedule_callback_(last_schedule_);
     }
 
@@ -497,7 +490,9 @@ void EhbParser::parseProgrammeElement(const uint8_t* data, size_t len) {
         if (event.duration_seconds == 0) {
             event.duration_seconds = 3600;  // 1 hour default
         }
-        last_schedule_.events.push_back(event);
+        if (last_schedule_.events.size() < MAX_EVENTS) {
+            last_schedule_.events.push_back(event);
+        }
     }
 }
 

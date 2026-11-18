@@ -105,6 +105,7 @@ private:
 
     // EPG: PacketDecoders for data subchannels (SAME as test_custom_muxer)
     std::map<uint8_t, std::unique_ptr<PacketDecoder>> epg_decoders_;
+    static constexpr size_t MAX_DATA_SUBCHANNELS = 8;
     std::set<uint8_t> data_subchannels_;
     std::set<uint16_t> processed_tids_;
     EhbParser ehb_parser_;
