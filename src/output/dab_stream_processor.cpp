@@ -284,6 +284,13 @@ void DabStreamProcessor::onDLPlus(uint8_t subchannel_id, const std::string& text
         last = o.str();
         LOG_DEBUG(DABPLUS, "DL Plus of service 0x" << std::hex << it->second << std::dec << ":" << o.str());
     }
+    // with the RadioText of the label, as RT+
+    std::vector<std::array<uint8_t, 3>> plain;
+    for (const auto& t : tags) {
+        plain.push_back({static_cast<uint8_t>(t.content_type), t.start_marker, t.length_marker});
+    }
+    muxer_.setRadioTextPlus(it->second, text, plain, !tags.empty() && tags[0].item_toggle,
+                            !tags.empty() && tags[0].item_running);
 }
 
 void DabStreamProcessor::stopService(uint8_t subchannel_id) {

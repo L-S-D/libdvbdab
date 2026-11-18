@@ -5,7 +5,9 @@
 #include "../src/output/pad_decoder.hpp"
 #include "../src/output/charsets.hpp"
 #include "../src/output/rds_uecp.hpp"
+#include "../src/output/ts_muxer.hpp"
 #include "../src/utils/crc_utils.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -36,8 +38,10 @@ static Bytes segment(int toggle, int num, bool last, uint8_t charset, const std:
 }
 
 // DL Plus tags (TS 102 980) for the label with this toggle
-static Bytes dlplus(int link, uint8_t type, uint8_t start, uint8_t len) {
-    Bytes dg = {0x12, static_cast<uint8_t>(link << 7 | 3), 0x00, type, start, len};
+static Bytes dlplus(int link, uint8_t type, uint8_t start, uint8_t len, bool item_toggle = false,
+                    bool item_running = false) {
+    Bytes dg = {0x12, static_cast<uint8_t>(link << 7 | 3), static_cast<uint8_t>(item_toggle << 3 | item_running << 2),
+                type, start, len};
     uint16_t c = crc16_ccitt_xor(dg.data(), dg.size());
     dg.push_back(c >> 8);
     dg.push_back(c & 0xFF);
@@ -115,6 +119,15 @@ int main() {
         feed_label(pad, 0, "Artist - Title");
         feed(pad, dlplus(0, static_cast<uint8_t>(DLPlusContentType::ITEM_TITLE), 9, 4));
         check(tags.size() == 1 && tags[0].extract(text) == "Title", "DL Plus tags of the label");
+        check(!tags[0].item_toggle && !tags[0].item_running, "without the item bits of the command");
+        feed(pad, dlplus(0, static_cast<uint8_t>(DLPlusContentType::ITEM_TITLE), 9, 4, true, true));
+        check(tags.size() == 1 && tags[0].item_toggle && tags[0].item_running,
+              "a command with other item bits is a new one, and the tags have them");
+        // the markers count characters: two letters of two bytes before the tag
+        DLPlusTag lied{DLPlusContentType::ITEM_TITLE, 8, 3};
+        check(lied.extract("\xC3\x84rzte \xE2\x80\x93 Lied") == "Lied" &&
+                  DLPlusTag{DLPlusContentType::ITEM_ARTIST, 0, 4}.extract("\xC3\x84rzte - Lied") == "\xC3\x84rzte",
+              "a tag is taken out by characters, not bytes");
         // a marker behind the end of the text
         DLPlusTag t{DLPlusContentType::ITEM_TITLE, 100, 20};
         check(t.extract("short").empty(), "a tag behind the end of the text is empty");
@@ -169,6 +182,128 @@ int main() {
                       u[7] == 1 + text.size() && u[8] == 0x01 &&
                       std::string(u.begin() + 9, u.end() - 2) == text;
         check(msg_ok, "UECP: a RadioText message with the text and the A/B flag");
+    }
+
+    {
+        // RadioText Plus: the tags of DL Plus, by where their characters are in the RadioText
+        const uint8_t TITLE = 1, ARTIST = 4, ALBUM = 2;
+        RdsText m = rdsRadioTextMapped("Artist - Title");
+        std::vector<RtPlusTag> tags = rtPlusTags(m, {{ARTIST, 0, 5}, {TITLE, 9, 4}});
+        check(m.text == "Artist - Title" && tags.size() == 2 && tags[0].content_type == ARTIST && tags[0].start == 0 &&
+                  tags[0].length_minus_1 == 5 && tags[1].content_type == TITLE && tags[1].start == 9 &&
+                  tags[1].length_minus_1 == 4,
+              "RT+: tags of a label that is the RadioText as it is");
+
+        // the frame, read as Kodi reads it (VideoPlayerRadioRDS.cpp)
+        struct Group {
+            bool toggle, running;
+            int typ[2], start[2], len[2];
+        };
+        auto read = [](const std::vector<uint8_t>& f, bool& announced) {
+            std::vector<Group> groups;
+            Bytes u;
+            for (size_t i = 1; i + 1 < f.size(); i++) {
+                if (f[i] == 0xFD && i + 2 < f.size()) u.push_back(static_cast<uint8_t>(0xFD + f[++i]));
+                else u.push_back(f[i]);
+            }
+            announced = false;
+            if (u.size() < 6 || u[3] + 6u != u.size() ||
+                crc16_ccitt_xor(u.data(), u.size() - 2) != static_cast<uint16_t>(u[u.size() - 2] << 8 | u[u.size() - 1]))
+                return groups;
+            const uint8_t* e = u.data() + 4;
+            size_t left = u[3];
+            while (left > 0) {
+                if (e[0] == 0x40 && left >= 8) {   // ODA configuration: 8 bytes
+                    announced = e[1] == 0x16 && e[2] == 0x4B && e[3] == 0xD7;
+                    e += 8;
+                    left -= 8;
+                } else if (e[0] == 0x46 && left >= 10 && e[1] == 8 && e[2] == 0x4B && e[3] == 0xD7) {
+                    Group g;
+                    g.toggle = e[5] & 0x10;
+                    g.running = e[5] & 0x08;
+                    g.typ[0] = (0x38 & e[5] << 3) | e[6] >> 5;
+                    g.start[0] = (0x3e & e[6] << 1) | e[7] >> 7;
+                    g.len[0] = 0x3f & e[7] >> 1;
+                    g.typ[1] = (0x20 & e[7] << 5) | e[8] >> 3;
+                    g.start[1] = (0x38 & e[8] << 3) | e[9] >> 5;
+                    g.len[1] = 0x1f & e[9];
+                    groups.push_back(g);
+                    e += 10;
+                    left -= 10;
+                } else {
+                    groups.clear();
+                    break;
+                }
+            }
+            return groups;
+        };
+        bool announced = false;
+        std::vector<Group> g = read(uecpRtPlusFrame(tags, true, true), announced);
+        check(announced && g.size() == 1 && g[0].toggle && g[0].running && g[0].typ[0] == ARTIST && g[0].start[0] == 0 &&
+                  g[0].len[0] == 5 && g[0].typ[1] == TITLE && g[0].start[1] == 9 && g[0].len[1] == 4,
+              "RT+: the application is announced, a group has both tags and the item bits");
+        g = read(uecpRtPlusFrame(tags, false, false), announced);
+        check(g.size() == 1 && !g[0].toggle && !g[0].running, "RT+: item bits that are not set");
+        check(uecpRtPlusFrame({}, true, true).empty(), "RT+: no frame without tags");
+
+        // a character that becomes three ("..."), and letters outside ASCII
+        m = rdsRadioTextMapped("Wait\xE2\x80\xA6 Title \xC3\xA4\xC3\xB6");
+        tags = rtPlusTags(m, {{TITLE, 6, 4}, {ALBUM, 12, 1}});
+        check(m.text.substr(0, 13) == "Wait... Title" && tags.size() == 2 && tags[0].start == 8 &&
+                  tags[0].length_minus_1 == 4 && tags[1].start == 14 && tags[1].length_minus_1 == 1 &&
+                  m.text.substr(tags[0].start, tags[0].length_minus_1 + 1u) == "Title",
+              "RT+: markers follow the characters into the RadioText");
+
+        // a label longer than a RadioText: tags behind the cut or across it are left out
+        std::string longlabel = "Artist Name - " + std::string(20, 'a') + " " + std::string(20, 'b') + " " +
+                                std::string(20, 'c') + " the end";
+        m = rdsRadioTextMapped(longlabel);
+        tags = rtPlusTags(m, {{ARTIST, 0, 10}, {TITLE, 14, 70}, {ALBUM, 80, 6}, {0, 0, 0}, {70, 0, 3}});
+        check(m.text.size() <= RDS_RT_MAX && tags.size() == 1 && tags[0].content_type == ARTIST,
+              "RT+: of a label that was cut only the tags that are whole in the RadioText; no dummy, no type above 63");
+
+        // three tags, one too long for a second place: two groups, the long one in a first place
+        m = rdsRadioTextMapped(std::string(40, 't') + " by Artist on Album");
+        tags = rtPlusTags(m, {{ARTIST, 44, 5}, {TITLE, 0, 39}, {ALBUM, 54, 4}});
+        g = read(uecpRtPlusFrame(tags, false, true), announced);
+        check(tags.size() == 3 && g.size() == 2 && g[0].typ[0] == TITLE && g[0].len[0] == 39 && g[0].typ[1] == ARTIST &&
+                  g[0].start[1] == 44 && g[1].typ[0] == ALBUM && g[1].start[0] == 54 && g[1].typ[1] == 0,
+              "RT+: a tag of 40 characters takes a first place, three tags are two groups");
+    }
+    {
+        // in the TS: the RT+ frame follows the RadioText in its PES, and goes with the text
+        TsMuxer mux;
+        std::vector<uint8_t> ts;
+        mux.setOutput([&](const uint8_t* d, size_t n) { ts.insert(ts.end(), d, d + n); });
+        TsService svc{};
+        svc.sid = 0x1000;
+        svc.pmt_pid = 0x100;
+        svc.audio_pid = 0x1000;
+        svc.rds_pid = 0x1100;
+        mux.addService(svc);
+        auto run = [&](int64_t from) {
+            for (int i = 0; i < 200; i++) mux.tick(from + i * 2160);
+        };
+        const uint8_t oda[] = {0x46, 0x08, 0x4B, 0xD7};
+        auto count = [&](size_t from) {
+            size_t n = 0;
+            for (auto it = ts.begin() + static_cast<std::ptrdiff_t>(from);
+                 (it = std::search(it, ts.end(), oda, oda + 4)) != ts.end(); ++it)
+                n++;
+            return n;
+        };
+        mux.setRadioText(0x1000, "Artist - Title");
+        mux.setRadioTextPlus(0x1000, "Another text", {{4, 0, 5}}, true, true);
+        run(90000);
+        check(count(0) == 0, "RT+ tags of a label that is not the RadioText are not sent");
+        size_t mark = ts.size();
+        mux.setRadioTextPlus(0x1000, "Artist - Title", {{4, 0, 5}, {1, 9, 4}}, true, true);
+        run(90000 + 200 * 2160);
+        check(count(mark) >= 1, "RT+ tags of the RadioText are in the TS");
+        mark = ts.size();
+        mux.setRadioText(0x1000, "Something else");
+        run(90000 + 400 * 2160);
+        check(count(mark) == 0, "with a new RadioText the old tags are gone");
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);

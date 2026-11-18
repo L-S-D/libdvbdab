@@ -10,8 +10,8 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
   - DAB (MPEG-1 Layer II) frame extraction
   - Dynamic labels (DLS) from the PAD of DAB+ and DAB (MPEG Layer II) audio:
     data groups checked by their CRC, a label only when all its segments
-    came; EBU Latin, UCS-2 and UTF-8 labels. Their DL Plus tags are decoded
-    and so far only logged (level debug).
+    came; EBU Latin, UCS-2 and UTF-8 labels. Their DL Plus tags (title,
+    artist, ...) go out with the RadioText as RadioText Plus.
 
 - **Lost frames**
   - The frame counter of the ETI frames (FCT) tells lost frames. A DAB+
@@ -79,6 +79,12 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     ("RDS via UECP"), on a change and then every 3 s. tvheadend passes it on
     as "RDS", Kodi shows it. RadioText has at most 64 characters: a longer
     label is cut at a word. The programme guide (EIT schedule) stays apart.
+  - The DL Plus tags of a label as RadioText Plus (RT+, application 0x4BD7):
+    a second UECP frame after the RadioText, with the ODA configuration
+    (MEC 0x40) and two tags per ODA data message (MEC 0x46), as Kodi reads
+    them. The markers are put from the characters of the label to those of
+    the RadioText; a tag that the cut to 64 characters took, or that does
+    not fit the fields of RT+, is left out.
 
 - **EPG Support**
   - EHB (ETSI TS 102 371) schedule parsing

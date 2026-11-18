@@ -79,15 +79,25 @@ enum class DLPlusContentType : uint8_t {
 // DL Plus tag extracted from PAD
 struct DLPlusTag {
     DLPlusContentType content_type;
-    uint8_t start_marker;   // Start position in DL text (0-127)
-    uint8_t length_marker;  // Length of tagged text (0-127)
+    uint8_t start_marker;   // Start position in DL text (0-127), in characters
+    uint8_t length_marker;  // Length of tagged text - 1 (0-127), in characters
+    // of the command the tag came in: the item toggle bit (changes with a new
+    // item) and the item running bit (the item is on air)
+    bool item_toggle{false};
+    bool item_running{false};
 
-    // Extract the tagged substring from a DL string
+    // Extract the tagged substring from a DL string (UTF-8: the markers count
+    // characters, not bytes)
     std::string extract(const std::string& dl_text) const {
-        if (start_marker >= dl_text.size()) return "";
-        size_t len = std::min(static_cast<size_t>(length_marker + 1),
-                              dl_text.size() - start_marker);
-        return dl_text.substr(start_marker, len);
+        size_t pos = 0, chars = 0, from = std::string::npos;
+        while (pos < dl_text.size()) {
+            if (chars == start_marker) from = pos;
+            if (chars == static_cast<size_t>(start_marker) + length_marker + 1) break;
+            pos++;
+            while (pos < dl_text.size() && (static_cast<unsigned char>(dl_text[pos]) & 0xC0) == 0x80) pos++;
+            chars++;
+        }
+        return from == std::string::npos ? "" : dl_text.substr(from, pos - from);
     }
 };
 

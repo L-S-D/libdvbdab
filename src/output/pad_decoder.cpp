@@ -260,12 +260,15 @@ void PadDecoder::dlPlus(const uint8_t* dg, size_t field_len) {
         t.content_type = static_cast<DLPlusContentType>(f[1 + 3 * i] & 0x7F);
         t.start_marker = f[2 + 3 * i] & 0x7F;
         t.length_marker = f[3 + 3 * i] & 0x7F;
+        t.item_toggle = (f[0] & 0x08) != 0;
+        t.item_running = (f[0] & 0x04) != 0;
         if (t.content_type != DLPlusContentType::DUMMY) tags.push_back(t);
     }
     bool same = link == tags_link_ && tags.size() == tags_.size() &&
                 std::equal(tags.begin(), tags.end(), tags_.begin(), [](const DLPlusTag& a, const DLPlusTag& b) {
                     return a.content_type == b.content_type && a.start_marker == b.start_marker &&
-                           a.length_marker == b.length_marker;
+                           a.length_marker == b.length_marker && a.item_toggle == b.item_toggle &&
+                           a.item_running == b.item_running;
                 });
     if (same) return;
     tags_ = std::move(tags);

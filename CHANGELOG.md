@@ -43,6 +43,14 @@ Service information
   has an EIT schedule and an EIT present/following; before, every service
   claimed a schedule.
 
+RadioText Plus
+- The DL Plus tags of a dynamic label (title, artist and the like) go out
+  with its RadioText as RT+: UECP ODA configuration (MEC 0x40) and ODA data
+  (MEC 0x46, application 0x4BD7) in a second frame of the same PES. They
+  were decoded and only logged before; the item toggle and item running
+  bits are kept now, and tags are taken out of a label by characters, not
+  bytes.
+
 C API
 - Statistics (`DVBDAB_HAVE_STATS`): `dvbdab_streamer_get_stats()` and
   `dvbdab_streamer_get_service_stats()` - frames that came, were lost or

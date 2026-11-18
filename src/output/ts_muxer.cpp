@@ -89,6 +89,20 @@ void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
     rt.text = rds;
     rt.ab = !rt.ab;  // a new text: receivers start it anew
     rt.frame = uecpRadioTextFrame(rds, rt.ab);
+    rt.plus_frame.clear();  // the tags were about the old text
+    rt.sent_pts = -1;
+}
+
+void TsMuxer::setRadioTextPlus(uint16_t sid, const std::string& text, const std::vector<std::array<uint8_t, 3>>& tags,
+                               bool item_toggle, bool item_running) {
+    auto it = radio_text_.find(sid);
+    if (it == radio_text_.end()) return;
+    RadioText& rt = it->second;
+    RdsText mapped = rdsRadioTextMapped(text);
+    if (mapped.text != rt.text) return;  // not the text that is on
+    std::vector<uint8_t> frame = uecpRtPlusFrame(rtPlusTags(mapped, tags), item_toggle, item_running);
+    if (frame == rt.plus_frame) return;
+    rt.plus_frame = std::move(frame);
     rt.sent_pts = -1;
 }
 
@@ -104,7 +118,9 @@ void TsMuxer::outputRadioTexts(int64_t pts) {
         // stamped with the time of its own audio (the services of an ensemble
         // need not be on one time line); when to send goes by the tick
         auto own = last_audio_pts_.find(sid);
-        outputPes(services_[it->second].rds_pid, rt.frame.data(), rt.frame.size(),
+        std::vector<uint8_t> frames = rt.frame;
+        frames.insert(frames.end(), rt.plus_frame.begin(), rt.plus_frame.end());
+        outputPes(services_[it->second].rds_pid, frames.data(), frames.size(),
                   own != last_audio_pts_.end() ? own->second : pts, false, 0, 0xBD);
         rt.sent_pts = pts;
     }

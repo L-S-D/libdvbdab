@@ -16,6 +16,7 @@
  *   ETSI EN 300 468 - DVB SI (PAT, PMT, SDT, EIT)
  */
 
+#include <array>
 #include <cstdint>
 #include <cstddef>
 #include <string>
@@ -142,6 +143,19 @@ public:
      */
     void setRadioText(uint16_t sid, const std::string& text);
 
+    /**
+     * @brief The DL Plus tags of the dynamic label that was set last
+     * @param sid   Service ID
+     * @param text  The label the tags are about (as given to setRadioText)
+     * @param tags  Each {content type, start marker, length marker}, in characters of the label
+     * @param item_toggle, item_running  The two bits of the DL Plus command
+     *
+     * They go out as RadioText Plus (RT+) with the RadioText: the tags that
+     * are still in it after its cut to 64 characters.
+     */
+    void setRadioTextPlus(uint16_t sid, const std::string& text, const std::vector<std::array<uint8_t, 3>>& tags,
+                          bool item_toggle, bool item_running);
+
     /// The same as RadioText "artist - title" (or the title alone)
     void setNowPlaying(uint16_t sid, const std::string& title, const std::string& artist = "");
 
@@ -247,6 +261,7 @@ private:
         std::string text;            // in the RDS character set
         bool ab{false};              // A/B flag, changes with the text
         std::vector<uint8_t> frame;
+        std::vector<uint8_t> plus_frame;  // its RT+ tags, when it has some
         int64_t sent_pts{-1};        // -1 = due
     };
     std::map<uint16_t, RadioText> radio_text_;
