@@ -283,13 +283,8 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
     size_t header_size = 4 + 4 + nst * 4 + 4;
     size_t fic_size = 0;
     if (ficf) {
-        switch (mid) {
-            case 1: fic_size = 96; break;
-            case 2: fic_size = 32; break;
-            case 3: fic_size = 128; break;
-            case 4: fic_size = 96; break;
-            default: fic_size = 96; break;
-        }
+        // EN 300 799: the FIC of a frame is 24 words, in mode III 32
+        fic_size = mid == 3 ? 128 : 96;
     }
 
     size_t stream_offset = header_size + fic_size;
