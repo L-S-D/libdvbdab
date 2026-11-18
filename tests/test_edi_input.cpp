@@ -4,6 +4,7 @@
 // Synthetic packets, no capture needed.
 
 #include "../src/ensemble_manager.hpp"
+#include "../src/logging.h"
 #include "../src/utils/crc_utils.hpp"
 #include <cstdint>
 #include <cstdio>
@@ -125,6 +126,9 @@ struct Rig {
 };
 
 int main() {
+    // the packets here have no FIC worth the name: its warnings are not the point
+    set_log_callback([](LogLevel, const char*, const char*) {});
+
     {
         Rig r;
         r.feed(frame_af(1));
@@ -158,6 +162,20 @@ int main() {
             r.feed(pf(static_cast<uint16_t>(20 + i), 2, 3, a.data() + 2 * t, a.size() - 2 * t));
         }
         check(r.frames == 3, "an AF with a lost fragment costs its frame, not the ones around it");
+    }
+    {
+        // the sender starts anew: its sequence numbers go on far behind the last
+        Rig r;
+        auto send = [&](uint16_t pseq, uint16_t dflc) {
+            Bytes a = frame_af(dflc);
+            size_t h = a.size() / 2;
+            r.feed(pf(pseq, 0, 2, a.data(), h));
+            r.feed(pf(pseq, 1, 2, a.data() + h, a.size() - h));
+        };
+        for (int i = 0; i < 100; i++) send(static_cast<uint16_t>(40000 + i), static_cast<uint16_t>(i));
+        int before = r.frames;
+        for (int i = 0; i < 100; i++) send(static_cast<uint16_t>(36000 + i), static_cast<uint16_t>(100 + i));
+        check(before == 100 && r.frames >= before + 90, "after a jump back of the PF sequence number frames go on at once");
     }
     {
         Rig r;

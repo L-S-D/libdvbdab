@@ -754,12 +754,9 @@ void PacketDecoder::accumulateMotSegment(uint16_t transport_id, uint8_t dg_type,
         }
         auto& dir = directory_accumulators_[transport_id];
 
-        // Segment 0 starts a new carousel cycle - clear previous data
-        if (segment_number == 0) {
-            dir.segments.clear();
-            dir.last_seg = -1;
-            dir.bytes = 0;
-        }
+        // (Segments stay over the passes of the carousel: a directory is
+        // sent again and again so that a segment lost in one pass comes with
+        // the next. A new version has another transport id.)
         if (dir.segments.find(segment_number) == dir.segments.end()) {
             if (dir.bytes + len + SEGMENT_SHARE > MAX_MOT_DIRECTORY) {
                 dir.segments.clear();

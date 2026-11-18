@@ -76,6 +76,14 @@ public:
     // as it came; it is done then. false: none (any more). Only AFs without FEC.
     bool take_partial(PF_Partial& out);
 
+    // The sequence number is far behind the latest one seen (not merely a
+    // packet that came out of order): the counter of the sender started anew
+    bool behind(uint16_t pseq) const {
+        if (newest_pseq_ < 0) return false;
+        uint16_t age = static_cast<uint16_t>(newest_pseq_ - pseq);
+        return age >= 16 && age < 32768;
+    }
+
 private:
     int32_t newest_pseq_ = -1;   // the latest sequence number seen
     uint16_t plen_ = 0;          // payload length of a fragment but the last

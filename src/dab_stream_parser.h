@@ -199,6 +199,7 @@ private:
     bool est_complete() const;
     uint64_t est_mask_ = 0;      // est TAGs of the packet being decoded (bit n-1)
     bool est_bad_ = false;       // one of them was not taken
+    int pseq_behind_ = 0;        // PF packets in a row with a sequence number far behind
     void handle_partial_af(const PF_Partial& part);
 };
 

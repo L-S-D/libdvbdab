@@ -128,6 +128,23 @@ int DABStreamParser::handle_pf_packet(const uint8_t* pkt, size_t len) {
                   << " plen=" << hdr.plen << " len=" << len);
     }
 
+    // A sender that starts anew (or another one taking over) goes on with a
+    // sequence number of its own. One far behind the last would be taken for
+    // old packets until it has caught up - up to 13 minutes of nothing. A few
+    // such packets in a row are the new counter: start with it.
+    if (pf_reassembler_.behind(hdr.pseq)) {
+        if (++pseq_behind_ >= 8) {
+            LOG_DEBUG(STREAM, "PF sequence starts anew at " << hdr.pseq);
+            pf_reassembler_.reset();
+            last_out_pseq_ = -1;
+            last_pseq_ = -1;
+            layout_.clear();
+            pseq_behind_ = 0;
+        }
+    } else {
+        pseq_behind_ = 0;
+    }
+
     size_t af_len = 0;
     const uint8_t* af_data = pf_reassembler_.add_fragment(hdr, pkt, len, af_len);
 
