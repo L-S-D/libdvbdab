@@ -59,7 +59,8 @@ void MpeExtractor::process(const uint8_t* ts, uint16_t target_pid, uint32_t filt
         if (section_len == 0 && buffer.size() < 3) {
             size_t need = 3 - buffer.size();
             size_t copy = std::min(need, (size_t)len);
-            buffer.insert(buffer.end(), p, p + copy); p += copy; len -= copy;
+            for (size_t i = 0; i < copy; i++) buffer.push_back(p[i]);
+            p += copy; len -= copy;
             if (buffer.size() >= 3) section_len = ((buffer[1] & 0x0F) << 8) | buffer[2];
             else return;
         }

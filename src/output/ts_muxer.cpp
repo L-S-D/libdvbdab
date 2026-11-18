@@ -685,45 +685,33 @@ std::vector<uint8_t> TsMuxer::buildEitScheduleSection(uint16_t service_id, uint8
 }
 
 void TsMuxer::outputPes(uint16_t pid, const uint8_t* data, size_t len, int64_t pts, bool insert_pcr, int64_t pcr) {
-    // Build PES packet
-    std::vector<uint8_t> pes;
-    pes.reserve(len + 20);
-
-    // PES start code prefix
-    pes.push_back(0x00);
-    pes.push_back(0x00);
-    pes.push_back(0x01);
-
-    // Stream ID: 0xC0 = audio stream 0
-    pes.push_back(0xC0);
-
     // PES packet length (6 bytes header + 5 PTS + data)
     // 0 = unbounded for large packets
     size_t pes_len = 3 + 5 + len;  // flags(2) + header_len(1) + PTS(5) + data
     if (pes_len > 0xFFFF) pes_len = 0;
-    pes.push_back((pes_len >> 8) & 0xFF);
-    pes.push_back(pes_len & 0xFF);
-
-    // '10' + scrambling(2) + priority(1) + alignment(1) + copyright(1) + original(1)
-    pes.push_back(0x80);
-
-    // PTS_DTS_flags(2)=10 + other flags = 0x80
-    pes.push_back(0x80);
-
-    // PES_header_data_length = 5 (PTS only)
-    pes.push_back(0x05);
 
     // PTS (33 bits in 5 bytes with markers)
     // Format: '0010' + PTS[32:30] + '1' + PTS[29:15] + '1' + PTS[14:0] + '1'
     int64_t pts33 = pts & 0x1FFFFFFFFLL;
-    pes.push_back(0x21 | ((pts33 >> 29) & 0x0E));
-    pes.push_back((pts33 >> 22) & 0xFF);
-    pes.push_back(0x01 | ((pts33 >> 14) & 0xFE));
-    pes.push_back((pts33 >> 7) & 0xFF);
-    pes.push_back(0x01 | ((pts33 << 1) & 0xFE));
 
-    // Audio data
-    pes.insert(pes.end(), data, data + len);
+    const uint8_t header[] = {
+        0x00, 0x00, 0x01,                       // PES start code prefix
+        0xC0,                                   // Stream ID: 0xC0 = audio stream 0
+        static_cast<uint8_t>(pes_len >> 8), static_cast<uint8_t>(pes_len),
+        0x80,   // '10' + scrambling(2) + priority(1) + alignment(1) + copyright(1) + original(1)
+        0x80,   // PTS_DTS_flags(2)=10 + other flags
+        0x05,   // PES_header_data_length = 5 (PTS only)
+        static_cast<uint8_t>(0x21 | ((pts33 >> 29) & 0x0E)),
+        static_cast<uint8_t>(pts33 >> 22),
+        static_cast<uint8_t>(0x01 | ((pts33 >> 14) & 0xFE)),
+        static_cast<uint8_t>(pts33 >> 7),
+        static_cast<uint8_t>(0x01 | ((pts33 << 1) & 0xFE)),
+    };
+
+    // Build PES packet: header and audio data, in a buffer of its final size
+    std::vector<uint8_t> pes(sizeof(header) + len);
+    std::copy(header, header + sizeof(header), pes.begin());
+    std::copy(data, data + len, pes.begin() + sizeof(header));
 
     // Packetize into TS packets
     size_t offset = 0;
