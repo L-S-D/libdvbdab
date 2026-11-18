@@ -22,6 +22,10 @@ Input
 - MOT: directory and header are read as EN 301 234 has them.
 - UEP subchannel sizes for all 64 table indices; EEP-B sizes.
 
+TS output
+- EIT: a title or description longer than 120 bytes is cut after a whole
+  UTF-8 character (it could end in half of one).
+
 C API
 - `dvbdab_version()`, `dvbdab_version_string()`, `DVBDAB_VERSION_PATCH`.
 - Labels in `dvbdab_service_t` and `dvbdab_ensemble_t` have
@@ -49,6 +53,10 @@ Build
   `EnsembleManager::setSubchannelChangeCallback()` (the changed callback
   replaces it). The library no longer makes stderr unbuffered.
 - The tools `edi_info` and `edi_extract` moved to `tools/`.
+- The sections of PAT, PMT, SDT and EIT are built in `output/ts_tables.hpp`
+  (`TsService` and the PID constants moved there; `ts_muxer.hpp` includes
+  it).
+- The SPI parser logs what it skips (level debug).
 
 ## 2.4.0
 
