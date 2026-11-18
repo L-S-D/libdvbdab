@@ -8,9 +8,10 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
   - DAB+ (HE-AAC v2) superframe decoding: FireCode sync, AU CRC check (no
     Reed-Solomon correction)
   - DAB (MPEG-1 Layer II) frame extraction
-  - Dynamic labels (DLS) and their DL Plus tags from the PAD of DAB+ and DAB
-    (MPEG Layer II) audio: data groups checked by their CRC, a label only when
-    all its segments came; EBU Latin, UCS-2 and UTF-8 labels
+  - Dynamic labels (DLS) from the PAD of DAB+ and DAB (MPEG Layer II) audio:
+    data groups checked by their CRC, a label only when all its segments
+    came; EBU Latin, UCS-2 and UTF-8 labels. Their DL Plus tags are decoded
+    and so far only logged (level debug).
 
 - **Lost frames**
   - The frame counter of the ETI frames (FCT) tells lost frames. A DAB+
@@ -74,12 +75,12 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
 
 ### Requirements
 
-- GCC 10+ or Clang 12+ (C++17 required)
+- A C++17 compiler (built and tested with GCC 10 to 15 and clang 14 to 18)
 - CMake 3.20+
 - zlib
 - pugixml
 - Optional, for `DVBDAB_AAC_TRANSCODE`: faad2 and libavcodec/libavutil
-  (found with pkg-config; `-DDVBDAB_TRANSCODE=OFF` builds without them)
+  (found with pkg-config)
 
 ### Compile
 
@@ -88,76 +89,105 @@ cmake -B build
 cmake --build build
 ```
 
+| Option | Default | |
+|--------|---------|---|
+| `CMAKE_BUILD_TYPE` | `RelWithDebInfo` | |
+| `DVBDAB_TRANSCODE` | `AUTO` | DAB+ transcoding: `AUTO` builds it in when faad2 and libavcodec are found (and warns when not), `ON` requires them, `OFF` leaves it out |
+| `DVBDAB_WARNINGS` | `ON` | `-Wall -Wextra`; everything builds without a warning |
+| `DVBDAB_SANITIZE` | `OFF` | ASan and UBSan, for the tests |
+| `DVBDAB_FUZZ` | `OFF` | a fuzzing build, see [fuzz/README.md](fuzz/README.md) - never to be installed: checksums are not checked in it |
+
 ### Install
 
 ```bash
 sudo cmake --install build
 ```
 
-This installs:
-- Library: `/usr/local/lib/libdvbdab.a`
-- Headers: `/usr/local/include/dvbdab/`
+This installs (under `/usr/local` by default):
+- the library, `lib/libdvbdab.a`
+- `lib/pkgconfig/dvbdab.pc`
+- the headers of the API, `include/dvbdab/dvbdab_c.h` (C) and
+  `dvbdab.hpp`, `ts_scanner.hpp` (C++)
+- headers of the classes inside the library, below `include/dvbdab/`. They
+  are no stable interface: they change with any version.
 
 ### Link Against Library
 
-```cmake
-# In your CMakeLists.txt
-find_library(DVBDAB_LIB dvbdab)
-target_link_libraries(your_app ${DVBDAB_LIB} z pugixml)
-```
+The library is static, so its user links what it was built against as well:
+pugixml, zlib, the C++ runtime and, with transcoding, faad2 and libavcodec.
+`dvbdab.pc` lists all of it:
 
-Or with pkg-config style flags:
 ```bash
-g++ -o myapp myapp.cpp -ldvbdab -lz -lpugixml
+cc -o myapp myapp.c $(pkg-config --cflags --libs dvbdab)
 ```
 
-The library is static: `dvbdab.pc` lists what it was built against, with
-transcoding also faad2 and libavcodec, so
-`pkg-config --cflags --libs dvbdab` gives all of it.
+```cmake
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(DVBDAB REQUIRED IMPORTED_TARGET dvbdab)
+target_link_libraries(your_app PkgConfig::DVBDAB)
+```
+
+A program that brings its own FFmpeg must link the libavcodec the library
+was built with, or one of the same major version: with another one the
+library notices at run time, logs an error and does not transcode
+(`dvbdab_aac_transcode()` returns 0).
 
 ## Usage
 
-### C API Example
+Two small programs in [examples/](examples/) are built with the library, so
+they are kept working: [streamer.c](examples/streamer.c) (C: a TS with
+ETI-NA or TS NI in, the radio services out as a TS) and
+[scanner.cpp](examples/scanner.cpp) (C++: the ensembles of a capture).
+
+### C API
 
 ```c
 #include <dvbdab/dvbdab_c.h>
 
-// TS output callback
-void ts_callback(const uint8_t* data, size_t len, void* opaque) {
-    write(fd, data, len);
+static void ts_out(void *opaque, const uint8_t *data, size_t len)
+{
+    fwrite(data, 1, len, (FILE *)opaque);
 }
 
-int main() {
-    // A streamer for the IPv4 packets of one EDI stream (host byte order)
-    dvbdab_streamer_config_t config = {
-        .format = DVBDAB_FORMAT_IPV4,
-        .filter_ip = 0xEFC70201,    // 239.199.2.1
-        .filter_port = 1234
-    };
+    /* a streamer for the IPv4 packets of one EDI stream (host byte order) */
+    dvbdab_streamer_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.format = DVBDAB_FORMAT_IPV4;
+    config.filter_ip = 0xEFC70201;    /* 239.199.2.1 */
+    config.filter_port = 1234;
 
-    dvbdab_streamer_t* streamer = dvbdab_streamer_create(&config);
-    dvbdab_streamer_set_output(streamer, ts_callback, NULL);
+    dvbdab_streamer_t *streamer = dvbdab_streamer_create(&config);
+    dvbdab_streamer_set_output(streamer, ts_out, stdout);
 
-    // Feed the IPv4 packets, one per call, as the MPE or GSE decoder of
-    // the receiver gives them
+    /* the IPv4 packets, one per call, as the MPE or GSE decoder of the
+     * receiver gives them */
     while ((len = next_ipv4_packet(packet, sizeof(packet))) > 0) {
         dvbdab_streamer_feed(streamer, packet, len);
 
-        // Start output when ensemble info is ready
-        if (dvbdab_streamer_is_basic_ready(streamer)) {
+        /* services and subchannels are known: start the output */
+        if (!started && dvbdab_streamer_is_basic_ready(streamer)) {
             dvbdab_streamer_start_all(streamer);
+            started = 1;
         }
     }
 
     dvbdab_streamer_destroy(streamer);
-    return 0;
-}
 ```
 
-### Scanner Example
+For ETI-NA and TS NI the streamer is fed TS packets instead, and `pid` (for
+ETI-NA also `eti_padding`, `eti_bit_offset`, `eti_inverted`, which the
+scanner finds) takes the place of the address.
+
+An ensemble that changes while the stream runs is followed: services that
+come are added (and started, after `dvbdab_streamer_start_all()`), services
+that go are taken out of PAT and SDT, new labels get into the SDT.
+
+### Scanner
 
 The scanner finds the ETI-NA and TS NI V.11 ensembles of a TS (DAB over IP
-is the caller's: its IPv4 packets go to a `DVBDAB_FORMAT_IPV4` streamer).
+is the caller's: its IPv4 packets go to a `DVBDAB_FORMAT_IPV4` streamer;
+with `filter_ip` 0 it lists the ensembles of all the streams it sees,
+`dvbdab_streamer_get_all_ensembles()`).
 
 ```cpp
 #include <dvbdab/ts_scanner.hpp>
@@ -165,28 +195,65 @@ is the caller's: its IPv4 packets go to a `DVBDAB_FORMAT_IPV4` streamer).
 dvbdab::TsScanner scanner;
 scanner.setTimeout(5000);
 
-if (scanner.feed(ts_data, len) != 0) {
-    for (const auto& ensemble : scanner.getResults()) {
-        printf("Ensemble: %s (EID=0x%04x, PID %u)\n",
-               ensemble.label.c_str(), ensemble.eid, ensemble.pid);
-        for (const auto& service : ensemble.services) {
-            printf("  Service: %s (SID=0x%04x, subch=%d)\n",
-                   service.label.c_str(), service.sid, service.subchannel_id);
-        }
+while (!scanner.isDone() && more_ts(buf, &len)) {
+    scanner.feed(buf, len);
+}
+for (const auto& ensemble : scanner.getResults()) {
+    printf("Ensemble: %s (EID=0x%04x, PID %u)\n",
+           ensemble.label.c_str(), ensemble.eid, (unsigned)ensemble.pid);
+    for (const auto& service : ensemble.services) {
+        printf("  Service: %s (SID=0x%04x, subch=%d)\n",
+               service.label.c_str(), (unsigned)service.sid, service.subchannel_id);
     }
 }
 ```
 
-### Logging Integration
+### Logging
 
 ```c
-void my_log_handler(int level, const char* component, const char* message, void* opaque) {
-    printf("[%s] %s\n", component, message);
+static void my_log_handler(int level, const char *tag, const char *message)
+{
+    printf("[%s] %s\n", tag, message);
 }
 
-dvbdab_set_log_callback(my_log_handler, NULL);
+dvbdab_set_log_callback(my_log_handler);
 dvbdab_set_log_level(DVBDAB_LOG_DEBUG);
 ```
+
+Without a callback the library logs to stderr. Callback and level are one
+per process, not per handle.
+
+### Threads and order of calls
+
+- A handle (scanner, streamer) is not thread-safe: all calls on one handle
+  come from one thread, or the caller serializes them. Two handles are
+  independent of each other.
+- The output callback and the log callback are called from inside
+  `dvbdab_streamer_feed()`, in the thread that feeds. The streamer must not
+  be destroyed from inside them.
+- `dvbdab_streamer_set_output()` and `dvbdab_streamer_start_all()` may come
+  before or after the ensemble is known: called before, the services start
+  when it is.
+- What `get_*` functions return belongs to the caller and is freed with the
+  `free_*` function next to it; it may be used from any thread.
+
+### Versions
+
+`dvbdab_c.h` has the version it describes (`DVBDAB_VERSION_MAJOR`, `_MINOR`,
+`_PATCH`), and `dvbdab_version()` / `dvbdab_version_string()` return the one
+of the library that is linked. The structures of the API carry no size:
+header and library must be of one version. What a version added can be
+asked at compile time:
+
+| Macro | Since | |
+|-------|-------|---|
+| `DVBDAB_HAVE_FORMAT_IPV4` | 1.1.0 | `DVBDAB_FORMAT_IPV4` |
+| `DVBDAB_HAVE_AAC_OUTPUT` | 2.2.0 | `aac_output` of the streamer config |
+| `DVBDAB_HAVE_WANTED_PIDS` | 2.2.0 | `dvbdab_streamer_set_wanted_pids()` |
+| `DVBDAB_HAVE_RDS` | 2.3.0 | dynamic labels as RDS RadioText in the TS |
+| `DVBDAB_LABEL_SIZE` | 2.5.0 | labels of 65 bytes (17 before), `dvbdab_version()` |
+
+[CHANGELOG.md](CHANGELOG.md) has what each version changed.
 
 ## Tests
 
@@ -204,6 +271,9 @@ packet mode decoder - and each fuzz harness over its seeds. Fuzzing itself:
 they find in a capture; captures are not in the repository.
 
 ## Standalone Tools
+
+`edi_info` and `edi_extract` (sources in `tools/`, with an EDI parser of
+their own that needs no FIC) are built with the library and not installed.
 
 The tools and tests read MPE captures (`tests/support/mpe_ip_source.hpp`
 takes the IPv4 packets out of one PID); with 2.0 they no longer read GSE or
@@ -274,75 +344,7 @@ Some EDI streams do not include FIC (Fast Information Channel) data. Without FIC
   - DAB+: Look for FireCode CRC in superframe header
   - Data: Low bitrate (<16 kbps) subchannels
 
-## Stream Analysis: dump.ts (French Ensemble from 36E)
-
-This section documents findings from analyzing a FIC-less EDI stream captured from Eutelsat 36E (Russian satellite).
-
-### Stream Overview
-
-| Property | Value |
-|----------|-------|
-| File | dump.ts |
-| Size | 58 MB |
-| Format | BBF/GSE |
-| Source | Eutelsat 36E (PID 270) |
-| Multicast | 224.17.101.98:10198 |
-| AF packets | 10,813 |
-| FIC present | NO (ficf=0) |
-| Subchannels | 13 |
-| Content | French DAB ensemble |
-
-### Subchannel Analysis
-
-| Index | SCID | Bitrate | Codec | Notes |
-|-------|------|---------|-------|-------|
-| 1-5 | 14-18 | 160 kbps | MP2 | MPEG-1 Layer II, 48kHz stereo, playable |
-| 6-9 | 51-54 | 32 kbps | Unknown | See analysis below |
-| 10 | 62 | 8 kbps | Data | Time sync packets (t40/t41) |
-| 11-13 | 11-13 | 160 kbps | MP2 | MPEG-1 Layer II, 48kHz stereo, playable |
-
-### Unknown Format Analysis (Subchannels 6-9)
-
-The four 32 kbps subchannels (128 kbps total) contain an unidentified audio format:
-
-**Structure:**
-- 256-byte frames with `81 81 ff` sync word
-- 37-byte initial header before first frame
-- Zero padding at end of each frame
-- Additional `81 81 04` markers within payload
-
-**Statistics:**
-- Entropy: 7.17 bits/byte (highly compressed)
-- ~10,600 `81 81` patterns per subchannel
-
-**Ruled out:**
-- MP2 (no 0xFFFC sync)
-- DAB+ HE-AAC (no FireCode CRC)
-- ADTS AAC (no 0xFFF sync)
-- LATM AAC (no 0x56E sync)
-
-**Hypotheses:**
-1. MPEG Surround spatial audio (4 channels)
-2. Proprietary broadcaster format
-3. Scrambled/encrypted DAB+ audio
-
-### Data Channel (Subchannel 10)
-
-- 24-byte repeating blocks with CRC
-- Contains "t40"/"t41" identifiers
-- Likely time synchronization or tuning data
-
-### Commands Used
-
-With libdvbdab 1.x (2.0 reads no BBFrame captures):
-
-```bash
-# Analyze stream
-./build/edi_info bbf dump.ts
-
-# Extract all audio
-./build/edi_extract bbf dump.ts all /tmp/output_
-```
+What this gave for one such stream: [docs/ficless-edi-36e.md](docs/ficless-edi-36e.md).
 
 ## Architecture
 
@@ -370,6 +372,7 @@ Deterministic PID allocation based on subchannel_id:
 - PAT PID: `0x0000` (standard)
 - PMT PID: `0x0100 + subchannel_id`
 - Audio PID: `0x1000 + subchannel_id`
+- RDS PID (the dynamic label as RadioText): `0x1100 + subchannel_id`
 - SDT PID: `0x0011` (standard)
 - EIT PID: `0x0012` (standard)
 
@@ -395,4 +398,10 @@ Deterministic PID allocation based on subchannel_id:
 
 ## License
 
-MIT License
+The source of the library is under the MIT License ([LICENSE](LICENSE)).
+
+A library built with transcoding contains faad2, which is under the GPL
+(version 2 or later): that binary, and a program linked with it, can only be
+passed on under the GPL. libavcodec is LGPL 2.1 or later, or GPL, depending
+on how it was configured. `-DDVBDAB_TRANSCODE=OFF` builds a library without
+both.

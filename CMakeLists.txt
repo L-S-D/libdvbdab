@@ -9,7 +9,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT DEFINED CMAKE_CXX_
     set(CMAKE_CXX_COMPILER /usr/local/gcc-15/bin/g++)
 endif()
 
-project(libdvbdab LANGUAGES CXX)
+project(libdvbdab LANGUAGES C CXX)
 
 # C++17 is what the library needs (it builds with GCC 9 and clang 10 on)
 if(NOT DEFINED CMAKE_CXX_STANDARD)
@@ -322,6 +322,16 @@ add_executable(edi_extract
 # libFuzzer programs; else they get a main() that runs files and simple
 # mutations of them, and ctest runs each over its seeds that way.
 # ----------------------------------------------------------------------------
+# The examples of the README: built with everything else, as a C program and
+# a C++ program against the public headers only
+add_executable(example_streamer examples/streamer.c)
+target_include_directories(example_streamer PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(example_streamer dvbdab)
+set_target_properties(example_streamer PROPERTIES LINKER_LANGUAGE CXX C_STANDARD 99 C_EXTENSIONS OFF)
+add_executable(example_scanner examples/scanner.cpp)
+target_include_directories(example_scanner PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(example_scanner dvbdab)
+
 enable_testing()
 
 foreach(f edi_stream eti_frames pad mot_epg ts_inputs)
