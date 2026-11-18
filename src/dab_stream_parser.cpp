@@ -230,6 +230,8 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize) {
 bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::vector<TagPos>* layout) {
     tagpkt_count_++;
     edi_.m_fc.nst = 0;
+    est_mask_ = 0;
+    est_bad_ = false;
     int tag_count_local = 0;
 
     LOG_DEBUG(STREAM, "decode_tagpacket #" << tagpkt_count_ << " len=" << tagsize);
@@ -271,7 +273,7 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::
         } else if (tagId == 0x64657469) {  // "deti"
             decode_deti(val, taglen);
         } else if ((tagId & 0xFFFFFF00) == 0x65737400) {  // "est?"
-            decode_estn(val, taglen, tagId & 0xFF);
+            if (!decode_estn(val, taglen, tagId & 0xFF)) est_bad_ = true;
         }
 
         i += 8 + taglen;
@@ -279,7 +281,19 @@ bool DABStreamParser::decode_tagpacket(const uint8_t* pkt, size_t tagsize, std::
         tag_count_++;
     }
 
+    if (est_bad_ || !est_complete()) {
+        // not a frame: est TAGs must be est1..estN, each once and whole
+        edi_.m_fc_valid = false;
+        edi_.m_fc.nst = 0;
+        return false;
+    }
     return true;
+}
+
+// The est TAGs taken are est1..estN without a gap (the streams of the frame
+// to build are m_stc[0..nst-1])
+bool DABStreamParser::est_complete() const {
+    return (est_mask_ & (est_mask_ + 1)) == 0;
 }
 
 bool DABStreamParser::decode_starptr(const uint8_t* value, size_t len) {
@@ -293,7 +307,24 @@ bool DABStreamParser::decode_starptr(const uint8_t* value, size_t len) {
     return true;
 }
 
-bool DABStreamParser::decode_deti(const uint8_t* val, size_t /*len*/) {
+bool DABStreamParser::decode_deti(const uint8_t* val, size_t len) {
+    // Without all its bytes it is not taken: the frame characterization of
+    // the last one must not be mixed with half of this one
+    if (len < 6) {
+        edi_.m_fc_valid = false;
+        return false;
+    }
+    {
+        uint16_t head = read_be16(val);
+        uint8_t mid = (read_be32(val + 2) >> 22) & 0x03;
+        size_t need = 6 + ((head >> 15) & 1 ? 8 : 0) +
+                      ((head >> 14) & 1 ? (mid == 3 ? 32 * 4 : 24 * 4) : 0) +
+                      ((head >> 13) & 1 ? 3 : 0);
+        if (len < need) {
+            edi_.m_fc_valid = false;
+            return false;
+        }
+    }
     uint16_t detiHeader = read_be16(val);
     edi_.m_fc.atstf = (detiHeader >> 15) & 1;
     edi_.m_fc.ficf = (detiHeader >> 14) & 1;
@@ -339,6 +370,9 @@ bool DABStreamParser::decode_deti(const uint8_t* val, size_t /*len*/) {
 
 bool DABStreamParser::decode_estn(const uint8_t* value, size_t len, uint8_t n) {
     if (len < 3 || n == 0 || n > 64) return false;
+    // a stream is in a frame once, and it fits into an ETI frame
+    if (len - 3 > ETI_NI_RAW_SIZE || ((est_mask_ >> (n - 1)) & 1)) return false;
+    est_mask_ |= uint64_t(1) << (n - 1);
 
     uint32_t sstc = read_be24(value);
 
@@ -369,6 +403,17 @@ bool DABStreamParser::assemble_eti_frame(bool partial, uint64_t invalid_scids, b
     if ((edi_.m_fc.mid == 3 && edi_.fic_length != 32 * 4) ||
         (edi_.m_fc.mid != 3 && edi_.fic_length != 24 * 4)) {
         LOG_WARN(STREAM, "ETI FIC length mismatch: mid=" << edi_.m_fc.mid << " fic_len=" << (int)edi_.fic_length);
+        return false;
+    }
+
+    // The frame must fit: header, FIC, the streams, EOF and TIST
+    if (edi_.m_fc.nst > 64) return false;
+    size_t frame_bytes = 8 + size_t(edi_.m_fc.nst) * 4 + 4 + edi_.fic_length + 8;
+    for (int i = 0; i < edi_.m_fc.nst; i++) {
+        frame_bytes += edi_.m_stc[i].mst.size();
+    }
+    if (frame_bytes > ETI_NI_RAW_SIZE) {
+        LOG_DEBUG(STREAM, "ETI frame of " << frame_bytes << " bytes dropped");
         return false;
     }
 
@@ -506,6 +551,8 @@ void DABStreamParser::handle_partial_af(const PF_Partial& part) {
     uint64_t invalid = 0;
     bool deti = false;
     edi_.m_fc.nst = 0;
+    est_mask_ = 0;
+    est_bad_ = false;
     for (const auto& t : layout_) {
         bool came = part.covers(t.off, t.off + t.len);
         if (t.id == 0x2a707472) {  // "*ptr"
@@ -516,9 +563,11 @@ void DABStreamParser::handle_partial_af(const PF_Partial& part) {
             uint8_t n = t.id & 0xFF;
             if (n == 0 || n > 64) continue;
             if (came) {
-                decode_estn(af + t.off, t.len, n);
+                if (!decode_estn(af + t.off, t.len, n)) est_bad_ = true;
                 continue;
             }
+            if ((est_mask_ >> (n - 1)) & 1) continue;
+            est_mask_ |= uint64_t(1) << (n - 1);
             const StcInfo& ls = last_stc_[n - 1];
             EDI_STC& stc = edi_.m_stc[n - 1];
             stc.stream_index = n - 1;
@@ -537,6 +586,7 @@ void DABStreamParser::handle_partial_af(const PF_Partial& part) {
         uint16_t d = static_cast<uint16_t>(part.pseq - last_pseq_);
         edi_.m_fc.dflc = (last_dflc_ + d) % 5000;
     }
+    if (est_bad_ || !est_complete()) return;
     partial_af_count_++;
     if (assemble_eti_frame(true, invalid, deti)) {
         last_out_pseq_ = part.pseq;

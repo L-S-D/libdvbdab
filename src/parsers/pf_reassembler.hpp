@@ -7,7 +7,14 @@
 
 namespace dvbdab {
 
+// An AF packet holds one ETI frame (6144 bytes at most) and its TAG heads,
+// with FEC the parity of its Reed-Solomon blocks on top: the fragments of one
+// AF are never more than this, and never more than this many
 constexpr size_t MAX_PF_PAYLOAD = 65536;
+constexpr uint32_t MAX_PF_FRAGMENTS = 1024;
+// AFs being collected at a time (the fragments of an AF come one after the
+// other; a few are open at a time when packets come out of order)
+constexpr size_t MAX_PF_COLLECTORS = 32;
 
 // PF (Protocol Fragment) packet header - ETSI TS 102 821
 struct PF_Header {
@@ -29,6 +36,7 @@ struct PF_Collector {
     uint16_t pseq = 0;
     uint32_t fcount = 0;
     uint32_t fragments_collected = 0;
+    size_t bytes = 0;           // of the fragments collected
     bool fec = false;           // FEC enabled flag
     uint8_t rsk = 0;            // RS k (data bytes per chunk)
     uint8_t rsz = 0;            // RS z (trailing bytes to remove)

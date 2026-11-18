@@ -51,6 +51,16 @@ DABStreamParser& EnsembleManager::getParser(const StreamKey& key) {
 void EnsembleManager::processUdp(uint32_t dst_ip, uint16_t dst_port, const uint8_t* payload, size_t len) {
     StreamKey key{dst_ip, dst_port};
 
+    // A destination gets a parser when it sends what starts like EDI ("AF" or
+    // "PF"), and only so many do: without a filter every UDP stream of a
+    // transponder comes here
+    if (!parsers_.count(key)) {
+        bool edi = len >= 10 && (payload[0] == 'A' || payload[0] == 'P') && payload[1] == 'F';
+        if (!edi || parsers_.size() >= MAX_STREAMS) {
+            return;
+        }
+    }
+
     auto& parser = getParser(key);
 
     // Feed EDI packet directly (payload is PF or AF)

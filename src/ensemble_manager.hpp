@@ -95,6 +95,7 @@ private:
     // Get or create parser for a stream
     DABStreamParser& getParser(const StreamKey& key);
 
+    static constexpr size_t MAX_STREAMS = 64;   // EDI streams (ensembles) at a time
     std::map<StreamKey, std::unique_ptr<DABStreamParser>> parsers_;
     std::map<StreamKey, DABEnsemble> ensembles_;
     std::map<StreamKey, bool> basic_ready_flags_;

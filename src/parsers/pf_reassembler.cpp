@@ -1,5 +1,6 @@
 #include "pf_reassembler.hpp"
 #include "../logging.h"
+#include "../utils/crc_utils.hpp"
 #include <algorithm>
 
 namespace dvbdab {
@@ -25,6 +26,14 @@ void PF_Reassembler::cleanup_old_collectors() {
             } else {
                 ++it;
             }
+        }
+    }
+    // Ones that are not done and never will be (sequence numbers far from
+    // the latest: a jump of the counter, damaged headers): all but the latest
+    if (collectors_.size() > MAX_PF_COLLECTORS) {
+        for (auto it = collectors_.begin(); it != collectors_.end();) {
+            if (it->first != newest_pseq_) it = collectors_.erase(it);
+            else ++it;
         }
     }
 }
@@ -64,8 +73,18 @@ bool PF_Reassembler::parse_pf_header(const uint8_t* pkt, size_t len, PF_Header& 
         idx += 4;
     }
 
-    // Skip HCRC (2 bytes)
+    // HCRC over the header before it: a header that is damaged (or bytes that
+    // only start like one) must not set the fragment count
+    if (crc16_ccitt_xor(pkt, idx) != static_cast<uint16_t>((pkt[idx] << 8) | pkt[idx + 1])) {
+        return false;
+    }
     idx += 2;
+
+    // What an AF packet cannot be
+    if (hdr.fcount == 0 || hdr.fcount > MAX_PF_FRAGMENTS || hdr.findex >= hdr.fcount ||
+        static_cast<size_t>(hdr.fcount) * hdr.plen > MAX_PF_PAYLOAD) {
+        return false;
+    }
 
     // Sanity check: plen should fit within the packet
     if (hdr.plen > len - idx) {
@@ -109,16 +128,19 @@ const uint8_t* PF_Reassembler::add_fragment(const PF_Header& hdr, const uint8_t*
         c.rsk = hdr.fec ? hdr.rsk : hdr.fcount;
         c.rsz = hdr.fec ? hdr.rsz : 0;
         c.fragments_collected = 0;
+        c.bytes = 0;
         c.processed = false;
         c.fragments.clear();
     }
 
     if (hdr.findex >= c.fcount) return nullptr;
     if (c.fragments.count(hdr.findex)) return nullptr;  // Already have this fragment
+    if (c.bytes + hdr.plen > MAX_PF_PAYLOAD) return nullptr;
 
     // Store fragment
     c.fragments[hdr.findex].assign(payload, payload + hdr.plen);
     c.fragments_collected++;
+    c.bytes += hdr.plen;
 
     // Check if we have all fragments
     if (c.fragments_collected < c.fcount) {
@@ -139,6 +161,7 @@ const uint8_t* PF_Reassembler::add_fragment(const PF_Header& hdr, const uint8_t*
         // Step 1: De-interleave all fragments into rs_block
         // rs_block[k * fcount + j] = fragment[j][k]
         size_t rs_block_size = c.fcount * plen;
+        if (rs_block_size > MAX_PF_PAYLOAD) return nullptr;
         std::vector<uint8_t> rs_block(rs_block_size);
 
         for (uint32_t j = 0; j < c.fcount; j++) {
@@ -201,7 +224,7 @@ bool PF_Reassembler::take_partial(PF_Partial& out) {
         for (const auto& [i, f] : c.fragments)
             if (i + 1 < c.fcount) plen = f.size();
         if (plen == 0) plen = plen_;
-        if (plen == 0 || c.fcount == 0) continue;
+        if (plen == 0 || c.fcount == 0 || c.fcount * plen > MAX_PF_PAYLOAD) continue;
         out.pseq = pseq;
         out.data.assign(c.fcount * plen, 0);
         out.valid.clear();

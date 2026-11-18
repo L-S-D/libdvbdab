@@ -196,6 +196,9 @@ private:
 
     // an AF packet of PF sequence number pseq that comes after the last one out
     bool pseq_in_order(int32_t pseq) const;
+    bool est_complete() const;
+    uint64_t est_mask_ = 0;      // est TAGs of the packet being decoded (bit n-1)
+    bool est_bad_ = false;       // one of them was not taken
     void handle_partial_af(const PF_Partial& part);
 };
 
