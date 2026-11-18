@@ -145,6 +145,7 @@ private:
 
     // Parse MOT header core from segment 0
     bool parseMotHeaderCore(const uint8_t* data, size_t len, MOTHeaderInfo& info);
+    bool parseMotHeader(const uint8_t* data, size_t len, MOTHeaderInfo& info, size_t& header_size);
 
     // Stream buffer for accumulating subchannel data across frames
     std::vector<uint8_t> stream_buffer_;

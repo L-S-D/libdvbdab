@@ -58,6 +58,42 @@ static std::vector<uint8_t> packet(uint16_t addr, int ci, bool first, bool last,
     return p;
 }
 
+// a MOT data group (with CRC, segment field, and a transport id in its user
+// access field): type 3 header, 4 body, 6 directory; one segment of an object
+static std::vector<uint8_t> data_group(int type, int segment, bool last, uint16_t tid, const std::vector<uint8_t>& data) {
+    std::vector<uint8_t> dg = {static_cast<uint8_t>(0x70 | type), 0x00,
+                               static_cast<uint8_t>((last ? 0x80 : 0) | (segment >> 8)), static_cast<uint8_t>(segment),
+                               0x12, static_cast<uint8_t>(tid >> 8), static_cast<uint8_t>(tid),
+                               static_cast<uint8_t>(data.size() >> 8), static_cast<uint8_t>(data.size())};
+    dg.insert(dg.end(), data.begin(), data.end());
+    uint16_t c = crc16_ccitt_xor(dg.data(), dg.size());
+    dg.push_back(c >> 8);
+    dg.push_back(c & 0xFF);
+    return dg;
+}
+
+// a data group as the packets of address addr
+static void feed_group(PacketDecoder& dec, uint16_t addr, const std::vector<uint8_t>& dg, int& ci) {
+    for (size_t at = 0; at < dg.size(); at += 19) {
+        size_t n = dg.size() - at < 19 ? dg.size() - at : 19;
+        auto p = packet(addr, ci++ & 3, at == 0, at + n == dg.size(), dg.data() + at, n);
+        dec.feedSubchannelData(p.data(), p.size());
+    }
+}
+
+// a MOT header: the core (body size, header size, content type and subtype) and the ContentName
+static std::vector<uint8_t> mot_header(uint32_t body_size, const std::string& name) {
+    size_t header_size = 7 + 2 + 1 + name.size();
+    uint64_t core = (static_cast<uint64_t>(body_size) << 28) | (static_cast<uint64_t>(header_size) << 15) | (7u << 9) | 1;
+    std::vector<uint8_t> h;
+    for (int i = 6; i >= 0; i--) h.push_back(static_cast<uint8_t>(core >> (8 * i)));
+    h.push_back(0xC0 | 12);
+    h.push_back(static_cast<uint8_t>(1 + name.size()));
+    h.push_back(0x40);  // ISO 8859-1
+    h.insert(h.end(), name.begin(), name.end());
+    return h;
+}
+
 static size_t collected(const PacketDecoder& dec) {
     size_t n = dec.stream_buffer_.size();
     for (const auto& [a, b] : dec.dg_buffers_) n += b.data.size();
@@ -99,6 +135,43 @@ int main() {
             dec.feedSubchannelData(p.data(), p.size());
         }
         check(collected(dec) <= PacketDecoder::MAX_DATA_GROUP + 4096, "a data group without an end is not collected for ever");
+    }
+    {
+        // directory mode: the files of a carousel have their names in its directory
+        PacketDecoder dec;
+        std::vector<std::string> names;
+        std::vector<size_t> sizes;
+        dec.setMotCallback([&](uint16_t, const MOTHeaderInfo& h, const uint8_t*, size_t n) {
+            names.push_back(h.content_name);
+            sizes.push_back(n);
+        });
+        int ci = 0;
+        // the body of one file comes before the directory, in two segments
+        feed_group(dec, 7, data_group(4, 0, false, 0x0201, std::vector<uint8_t>(30, 0x41)), ci);
+        feed_group(dec, 7, data_group(4, 1, true, 0x0201, std::vector<uint8_t>(12, 0x42)), ci);
+        check(names.empty(), "a body without its directory entry is not put out");
+        // the directory: two objects, with a directory extension of 3 bytes before them
+        std::vector<uint8_t> a = mot_header(42, "first.EHB"), b = mot_header(20, "second.EHB");
+        std::vector<uint8_t> dir(13, 0);
+        dir[5] = 2;                      // NumberOfObjects
+        dir[12] = 3;                     // DirectoryExtensionLength
+        dir.insert(dir.end(), {0x40, 0x01, 0x02});
+        dir.insert(dir.end(), {0x02, 0x01});
+        dir.insert(dir.end(), a.begin(), a.end());
+        dir.insert(dir.end(), {0x02, 0x02});
+        dir.insert(dir.end(), b.begin(), b.end());
+        size_t total = dir.size();
+        dir[1] = static_cast<uint8_t>(total >> 16);
+        dir[2] = static_cast<uint8_t>(total >> 8);
+        dir[3] = static_cast<uint8_t>(total);
+        size_t half = dir.size() / 2;
+        feed_group(dec, 7, data_group(6, 0, false, 0x0100, std::vector<uint8_t>(dir.begin(), dir.begin() + half)), ci);
+        feed_group(dec, 7, data_group(6, 1, true, 0x0100, std::vector<uint8_t>(dir.begin() + half, dir.end())), ci);
+        check(names.size() == 1 && names[0] == "first.EHB" && sizes[0] == 42,
+              "the directory names the file whose body was waiting");
+        feed_group(dec, 7, data_group(4, 0, true, 0x0202, std::vector<uint8_t>(20, 0x43)), ci);
+        check(names.size() == 2 && names[1] == "second.EHB" && sizes[1] == 20, "and the one that comes after it");
+        check(dec.getDirectoryEntries().size() == 2, "the directory has its two entries, not what only looks like one");
     }
     {
         EhbParser ehb;

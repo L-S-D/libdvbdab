@@ -296,49 +296,54 @@ void PacketDecoder::processMotDataGroup(uint8_t dg_type, uint16_t transport_id,
 }
 
 bool PacketDecoder::parseMotHeaderCore(const uint8_t* data, size_t len, MOTHeaderInfo& info) {
+    size_t header_size = 0;
+    return parseMotHeader(data, len, info, header_size);
+}
+
+// A MOT header (EN 301 234, 6.1): the core of 7 bytes - BodySize (28 bits),
+// HeaderSize (13, core and extension), ContentType (6), ContentSubType (9) -
+// and the parameters of its extension, of which the ContentName is taken.
+// header_size: what the header says its size is. false: no whole core, or a
+// size that cannot be.
+bool PacketDecoder::parseMotHeader(const uint8_t* data, size_t len, MOTHeaderInfo& info, size_t& header_size) {
     if (len < 7) return false;
 
-    // MOT Header Core (EN 301 234 section 6.3)
-    // Bytes 0-3: BodySize (28 bits) + ContentType high (4 bits)
-    // Byte 4: ContentType low (2 bits) + ContentSubType high (6 bits)
-    // Bytes 5-6: ContentSubType low (3 bits) + HeaderSize (13 bits)
+    info.body_size = (static_cast<uint32_t>(data[0]) << 20) | (data[1] << 12) | (data[2] << 4) | (data[3] >> 4);
+    header_size = static_cast<size_t>((data[3] & 0x0F) << 9 | data[4] << 1 | data[5] >> 7);
+    info.content_type = (data[5] >> 1) & 0x3F;
+    info.content_subtype = static_cast<uint16_t>((data[5] & 0x01) << 8 | data[6]);
+    if (header_size < 7) return false;
 
-    info.body_size = ((data[0] << 20) | (data[1] << 12) | (data[2] << 4) | (data[3] >> 4)) & 0x0FFFFFFF;
-    info.content_type = ((data[3] & 0x0F) << 2) | ((data[4] >> 6) & 0x03);
-    info.content_subtype = ((data[4] & 0x3F) << 3) | ((data[5] >> 5) & 0x07);
-    uint16_t header_ext_len = ((data[5] & 0x1F) << 8) | data[6];
-
-    // Parse extension for ContentName (parameter 12)
-    size_t ext_pos = 7;
-    while (ext_pos < len && ext_pos < 7 + header_ext_len) {
-        uint8_t pli = (data[ext_pos] >> 6) & 0x03;
-        uint8_t pid = data[ext_pos] & 0x3F;
-        ext_pos++;
+    // Parameters: PLI (2 bits) says how long the data is, then the id (6 bits)
+    size_t end = header_size < len ? header_size : len;
+    size_t pos = 7;
+    while (pos < end) {
+        uint8_t pli = (data[pos] >> 6) & 0x03;
+        uint8_t id = data[pos] & 0x3F;
+        pos++;
 
         size_t plen = 0;
-        switch (pli) {
-            case 0: plen = 0; break;
-            case 1: plen = 1; break;
-            case 2: plen = 4; break;
-            case 3:
-                if (ext_pos < len) {
-                    if (data[ext_pos] & 0x80) {
-                        if (ext_pos + 1 < len)
-                            plen = ((data[ext_pos] & 0x7F) << 8) | data[ext_pos + 1];
-                        ext_pos += 2;
-                    } else {
-                        plen = data[ext_pos];
-                        ext_pos++;
-                    }
-                }
-                break;
+        if (pli == 1) {
+            plen = 1;
+        } else if (pli == 2) {
+            plen = 4;
+        } else if (pli == 3) {
+            if (pos >= end) break;
+            if (data[pos] & 0x80) {
+                if (pos + 1 >= end) break;
+                plen = static_cast<size_t>((data[pos] & 0x7F) << 8 | data[pos + 1]);
+                pos += 2;
+            } else {
+                plen = data[pos];
+                pos++;
+            }
         }
-        if (ext_pos + plen > len) break;
+        if (pos + plen > end) break;
 
-        if (pid == 12 && plen > 1) {  // ContentName
-            info.content_name = std::string(reinterpret_cast<const char*>(data + ext_pos + 1), plen - 1);
+        if (id == 12 && plen > 1) {  // ContentName: a character set byte, the name
+            info.content_name = std::string(reinterpret_cast<const char*>(data + pos + 1), plen - 1);
         }
-        ext_pos += plen;
+        pos += plen;
     }
 
     info.valid = true;
@@ -581,10 +586,9 @@ void PacketDecoder::processDataGroup(uint16_t address, const uint8_t* data, size
         if (header.segment_flag && header.user_access_flag && header.transport_id_flag) {
             accumulateMotSegment(header.transport_id, 6, header.segment_number,
                                  header.last_segment, payload, payload_len);
-        } else {
-            // Non-segmented directory (unusual but possible)
-            parseMotDirectory(payload, payload_len);
         }
+        // (a directory without the segmentation header and transport id
+        // every MOT data group has is none)
     } else if (header.type == 3) {
         // MOT Header - describes a single object (Header Mode)
         parseMotHeader(payload, payload_len);
@@ -611,110 +615,45 @@ void PacketDecoder::parseMotHeader(const uint8_t* data, size_t len) {
 }
 
 void PacketDecoder::parseMotDirectory(const uint8_t* data, size_t len) {
+    // MOT directory (EN 301 234, 7.2): CompressionFlag (1 bit), Rfu (1),
+    // DirectorySize (30); NumberOfObjects (16); DataCarouselPeriod (24);
+    // Rfu (1), Rfa (2), SegmentSize (13); DirectoryExtensionLength (16) and
+    // the extension; then for each object its transport id and its header.
     if (len < 13) {
         return;
     }
-
-    // MOT Directory (EN 301 234, section 7.2.3)
-    // Bytes 0-3: DirectorySize (30 bits) + CompressionFlag (1 bit) + RFU (1 bit)
-    // Bytes 4-5: NumberOfObjects (16 bits)
-    // Byte 6: CarouselPeriod (8 bits)
-    // Bytes 7-8: SortedFlag (1 bit) + SegmentSize (13 bits) + DirectoryExtensionFlag (1 bit) + RFU (1 bit)
-
-    uint16_t num_objects = (data[4] << 8) | data[5];
-    bool dir_ext_flag = (data[8] >> 1) & 0x01;
-
-    // Calculate entries offset
-    size_t entries_offset = 9;
-    if (dir_ext_flag && len >= 11) {
-        uint16_t dir_ext_len = (data[9] << 8) | data[10];
-        entries_offset = 11 + dir_ext_len;
-    }
-
-    // Skip observed 4-byte padding (00 00 00 XX)
-    if (entries_offset + 4 < len &&
-        data[entries_offset] == 0x00 && data[entries_offset+1] == 0x00 &&
-        data[entries_offset+2] == 0x00) {
-        entries_offset += 4;
-    }
-
-    // Skip observed 3-byte prefix (00 XX XX)
-    if (entries_offset + 3 < len && data[entries_offset] == 0x00) {
-        entries_offset += 3;
-    }
-
     // (A compressed directory is not read: the size to make room for would
     // come from the stream.)
-    const uint8_t* entries_data = data;
-    size_t entries_len = len;
+    if (data[0] & 0x80) {
+        return;
+    }
+    size_t num_objects = static_cast<size_t>(data[4] << 8 | data[5]);
+    size_t pos = 13 + static_cast<size_t>(data[11] << 8 | data[12]);
 
-    // Scan for ContentName markers (0xCC) and extract TID from fixed offset before them
-    // Entry structure: TID(2) + Info(7) + ContentName(0xCC + len + charset + name)
-    // ContentName marker is at offset 9 from entry start
-    int obj_count = 0;
-
-    for (size_t pos = entries_offset; pos + 15 < entries_len && obj_count < num_objects; pos++) {
-        // Look for ContentName marker pattern: 0xCC followed by reasonable length
-        if (entries_data[pos] != 0xcc) continue;
-
-        uint8_t name_len = entries_data[pos + 1];
-        if (name_len < 5 || name_len > 80) continue;  // Reasonable filename length
-        if (pos + 2 + name_len > entries_len) continue;
-
-        // Extract filename (skip charset indicator at pos+2)
-        std::string filename(reinterpret_cast<const char*>(entries_data + pos + 3), name_len - 1);
-
-        // Validate it looks like a filename (has extension)
-        if (filename.find('.') == std::string::npos) continue;
-        if (filename.find('/') != std::string::npos) continue;  // No paths
-
-        // ContentName is at offset 9 from entry start, so TID is at pos - 9
-        if (pos < entries_offset + 9) continue;
-        size_t entry_start = pos - 9;
-
-        uint16_t tid = (entries_data[entry_start] << 8) | entries_data[entry_start + 1];
-        uint8_t content_type = (entries_data[entry_start + 2] >> 2) & 0x3F;
-
-        // Validate TID - must be non-zero
-        // Note: removed tid < 10000 filter which was rejecting valid EPG files
-        if (tid == 0) {
-            continue;
+    for (size_t i = 0; i < num_objects && pos + 2 + 7 <= len; i++) {
+        uint16_t tid = static_cast<uint16_t>(data[pos] << 8 | data[pos + 1]);
+        MOTHeaderInfo info;
+        size_t header_size = 0;
+        if (!parseMotHeader(data + pos + 2, len - pos - 2, info, header_size) || pos + 2 + header_size > len) {
+            break;  // not a header: what follows cannot be found
         }
+        pos += 2 + header_size;
+        if (tid == 0) continue;
 
-        // Check if this TID is already in the map (avoid duplicates from scanning)
-        if (mot_directory_entries_.find(tid) != mot_directory_entries_.end()) {
-            continue;  // Skip duplicate
-        }
-
-        if (mot_directory_entries_.size() >= MAX_MOT_DIRECTORY_ENTRIES) {
+        // The entry of a transport id is what the directory says now (an id
+        // comes again for another file)
+        if (mot_directory_entries_.size() >= MAX_MOT_DIRECTORY_ENTRIES && !mot_directory_entries_.count(tid)) {
             mot_directory_entries_.clear();
         }
-        MOTHeaderInfo info;
-        info.content_name = filename;
-        // Extract body_size from header core (bytes 2-5 after TID, 28 bits)
-        // Per EN 301 234 section 6.3 and qt-dab mot-object.cpp
-        if (entry_start + 5 < entries_len) {
-            info.body_size = (entries_data[entry_start + 2] << 20) |
-                             (entries_data[entry_start + 3] << 12) |
-                             (entries_data[entry_start + 4] << 4) |
-                             ((entries_data[entry_start + 5] & 0xF0) >> 4);
-        }
-        info.content_type = content_type;
-        info.content_subtype = ((entries_data[entry_start + 2] & 0x03) << 7) |
-                               ((entries_data[entry_start + 3] >> 1) & 0x7F);
-        info.valid = true;
         mot_directory_entries_[tid] = info;
-        obj_count++;
 
         // Immediately check if body is waiting for this header
         auto obj_it = mot_objects_.find(tid);
         if (obj_it != mot_objects_.end() && obj_it->second.body_last_seg >= 0) {
             checkMotObjectComplete(tid);
         }
-
-        // Skip past this ContentName to avoid re-matching
-        pos += 2 + name_len;
     }
+
     // Build current TID set and detect changes
     std::set<uint16_t> current_tids;
     for (const auto& [tid, info] : mot_directory_entries_) {
