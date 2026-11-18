@@ -297,6 +297,12 @@ struct Stream {
 int main() {
     set_log_callback([](LogLevel, const char*, const char*) {});
 
+    check(dvbdab_version() == (DVBDAB_VERSION_MAJOR << 16 | DVBDAB_VERSION_MINOR << 8 | DVBDAB_VERSION_PATCH) &&
+              std::string(dvbdab_version_string()) == std::to_string(DVBDAB_VERSION_MAJOR) + "." +
+                                                          std::to_string(DVBDAB_VERSION_MINOR) + "." +
+                                                          std::to_string(DVBDAB_VERSION_PATCH),
+          "the library says the version of its header");
+
     {
         // bitrates: UEP by table 8, EEP of both sets
         DABParser p;
@@ -429,6 +435,21 @@ int main() {
                           fig0(2, cat({service(0x1001, 1, true), service(0x1002, 2, true)}))});
         two.labels = {label(0, 0x1234, "Ensemble"), label(1, 0x1001, "One again"), label(1, 0x1002, "Two")};
         st.run(two, {1, 2}, 150);
+        {
+            // the C structures: a label of 16 letters outside ASCII is whole
+            Fic uml = two;
+            uml.labels[1] = label(1, 0x1001, std::string(16, '\x91'));
+            Stream s2;
+            s2.run(uml, {1, 2}, 150);
+            dvbdab_ensemble_t* e = dvbdab_streamer_get_ensemble(s2.s);
+            std::string got;
+            for (int i = 0; e && i < e->service_count; i++)
+                if (e->services[i].sid == 0x1001) got = e->services[i].label;
+            std::string want;
+            for (int i = 0; i < 16; i++) want += "\xC3\xA4";
+            check(got == want, "a label of 16 umlauts is whole in the C structure (32 bytes of UTF-8)");
+            dvbdab_streamer_free_ensemble(e);
+        }
         check(st.out.programs == (std::set<uint16_t>{0x1001, 0x1002}) && st.out.pat_changes > v,
               "a service that comes while the stream runs is in a new version of the PAT");
         check(st.out.names[0x1001] == "One again" && st.out.names[0x1002] == "Two", "and the SDT has its name and the changed one");

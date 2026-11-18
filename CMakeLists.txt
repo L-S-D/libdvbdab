@@ -364,6 +364,12 @@ endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
 include(GNUInstallDirs)
 
 # Generate pkg-config file
+# The version is the one in the header
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/include/dvbdab/dvbdab_c.h DVBDAB_VERSION_LINES
+     REGEX "^#define DVBDAB_VERSION_(MAJOR|MINOR|PATCH) [0-9]+")
+string(REGEX REPLACE ".*MAJOR ([0-9]+).*MINOR ([0-9]+).*PATCH ([0-9]+).*" "\\1.\\2.\\3"
+       DVBDAB_VERSION "${DVBDAB_VERSION_LINES}")
+message(STATUS "libdvbdab ${DVBDAB_VERSION}")
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/dvbdab.pc.in
     ${CMAKE_CURRENT_BINARY_DIR}/dvbdab.pc

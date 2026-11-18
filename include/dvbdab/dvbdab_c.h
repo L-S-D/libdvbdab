@@ -46,10 +46,15 @@ extern "C" {
 /* Opaque scanner handle - created with dvbdab_scanner_create() */
 typedef struct dvbdab_scanner dvbdab_scanner_t;
 
+/* A label as UTF-8 with its terminator: 16 characters of the DAB character
+ * sets, which are up to 3 bytes each (2.5.0 on; 17 bytes before, which cut
+ * labels with letters outside ASCII short) */
+#define DVBDAB_LABEL_SIZE 65
+
 /* DAB service info (C struct) */
 typedef struct {
     uint32_t sid;           /* Service ID */
-    char label[17];         /* Service label (16 chars + null) */
+    char label[DVBDAB_LABEL_SIZE]; /* Service label, UTF-8 */
     int bitrate;            /* Bitrate in kbps */
     int subchannel_id;      /* Sub-channel ID */
     int dabplus;            /* 1 for DAB+, 0 for DAB */
@@ -58,7 +63,7 @@ typedef struct {
 /* DAB ensemble info (C struct) */
 typedef struct {
     uint16_t eid;           /* Ensemble ID */
-    char label[17];         /* Ensemble label */
+    char label[DVBDAB_LABEL_SIZE]; /* Ensemble label, UTF-8 */
     uint32_t source_ip;     /* Source multicast IP (0 for ETI-NA) */
     uint16_t source_port;   /* Source UDP port (0 for ETI-NA) */
     uint16_t source_pid;    /* PID where ensemble was found */
@@ -197,6 +202,14 @@ typedef enum {
  * with a PCR per service ahead of the PTS, PES by time, an SDT in sections
  * (2.4.0 on) */
 #define DVBDAB_VERSION_MINOR 4
+#define DVBDAB_VERSION_PATCH 0
+
+/* The version of the library that is linked, to compare with the macros
+ * above (the version of the header the caller was built with): the
+ * structures here have no size field, header and library must be of one
+ * version. As (major << 16 | minor << 8 | patch), and as "2.4.0". */
+unsigned int dvbdab_version(void);
+const char *dvbdab_version_string(void);
 
 /* Opaque unified streamer handle - created with dvbdab_streamer_create() */
 typedef struct dvbdab_streamer dvbdab_streamer_t;

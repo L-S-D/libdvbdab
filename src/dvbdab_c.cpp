@@ -19,12 +19,13 @@ struct dvbdab_scanner {
     TsScanner scanner;
 };
 
-/* A label as UTF-8 into the 17 bytes of the C structures: cut at a character
- * boundary, so a multi-byte character is never split (invalid UTF-8 ends up
- * in JSON and config files of the caller) */
+/* A label as UTF-8 into the C structures: cut at a character boundary, so a
+ * multi-byte character is never split (invalid UTF-8 ends up in JSON and
+ * config files of the caller) */
 static void copy_label(char *dst, const std::string &src)
 {
-    size_t n = src.size() < 16 ? src.size() : 16;
+    const size_t room = DVBDAB_LABEL_SIZE - 1;
+    size_t n = src.size() < room ? src.size() : room;
     while (n > 0 && n < src.size() && (static_cast<unsigned char>(src[n]) & 0xC0) == 0x80) {
         n--;
     }
@@ -428,6 +429,19 @@ static void process_eti_frame(dvbdab_streamer* s, const uint8_t* eti_ni, size_t 
 }
 
 extern "C" { // Resume C API
+
+#define DVBDAB_STR_(x) #x
+#define DVBDAB_STR(x) DVBDAB_STR_(x)
+
+unsigned int dvbdab_version(void)
+{
+    return DVBDAB_VERSION_MAJOR << 16 | DVBDAB_VERSION_MINOR << 8 | DVBDAB_VERSION_PATCH;
+}
+
+const char *dvbdab_version_string(void)
+{
+    return DVBDAB_STR(DVBDAB_VERSION_MAJOR) "." DVBDAB_STR(DVBDAB_VERSION_MINOR) "." DVBDAB_STR(DVBDAB_VERSION_PATCH);
+}
 
 int dvbdab_aac_transcode(void)
 {

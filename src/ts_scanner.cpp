@@ -10,9 +10,6 @@
 #include <map>
 #include <vector>
 
-// Force unbuffered stderr for debug
-static struct StderrInit { StderrInit() { setvbuf(stderr, NULL, _IONBF, 0); } } _stderr_init;
-
 namespace dvbdab {
 
 // Per-PID state
