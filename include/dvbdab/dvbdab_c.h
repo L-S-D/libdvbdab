@@ -192,8 +192,9 @@ typedef enum {
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
  * subchannels of EDI packets with lost fragments (2.1.0 on); the DAB+ output
- * modes (aac_output) and the wanted PIDs (2.2.0 on) */
-#define DVBDAB_VERSION_MINOR 2
+ * modes (aac_output) and the wanted PIDs (2.2.0 on); dynamic labels checked
+ * by their CRC, also of DAB, put out as RDS RadioText (2.3.0 on) */
+#define DVBDAB_VERSION_MINOR 3
 
 /* Opaque unified streamer handle - created with dvbdab_streamer_create() */
 typedef struct dvbdab_streamer dvbdab_streamer_t;
