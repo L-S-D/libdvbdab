@@ -5,6 +5,7 @@
 
 #include <dvbdab/dvbdab_c.h>
 #include "../src/dab_parser.h"
+#include "../src/ensemble_manager.hpp"
 #include "../src/logging.h"
 #include "../src/utils/crc_utils.hpp"
 #include <cstdint>
@@ -97,7 +98,7 @@ struct Fic {
     }
 };
 
-// an ETI frame with this FIC and no streams
+// an ETI frame with this FIC and no streams, its two CRCs right
 static Bytes eti_frame(int n, const Bytes& fic) {
     Bytes f(6144, 0x55);
     f[0] = 0xFF;
@@ -107,8 +108,15 @@ static Bytes eti_frame(int n, const Bytes& fic) {
     f[4] = static_cast<uint8_t>(n % 250);
     f[5] = 0x80;  // FICF, no streams
     f[6] = 0x08;  // mode I
-    f[7] = 0;
+    f[7] = 25;    // frame length in words: EOH and the FIC
+    f[8] = f[9] = 0;  // MNSC
+    uint16_t c = crc16_ccitt_xor(&f[4], 6);
+    f[10] = c >> 8;
+    f[11] = c & 0xFF;
     std::memcpy(&f[12], fic.data(), fic.size());
+    c = crc16_ccitt_xor(&f[12], 96);
+    f[108] = c >> 8;
+    f[109] = c & 0xFF;
     return f;
 }
 
@@ -377,6 +385,33 @@ int main() {
         check(find(p.get_ensemble(), 0x1001) != nullptr, "a service that is no longer sent stays for some seconds");
         feed(p, less, 260, n);
         check(!find(p.get_ensemble(), 0x1001) && find(p.get_ensemble(), 0x1002), "and is gone after 12 s");
+    }
+    {
+        // ETI frames as ETI-NA and TS NI give them: judged by their CRCs
+        EnsembleManager m;
+        int frames = 0, lost = 0;
+        m.setEtiExCallback([&](const StreamKey&, const uint8_t*, size_t, uint16_t, uint64_t invalid) {
+            frames++;
+            if (invalid == ~uint64_t(0)) lost++;
+        });
+        Fic fic;
+        fic.config = cat({ensemble_info(0x1234), fig0(1, subch_eep(1, 18, 3)), fig0(2, service(0x1001, 1, true))});
+        fic.labels = {label(0, 0x1234, "Ensemble"), label(1, 0x1001, "One")};
+        bool all_taken = true;
+        for (int n = 0; n < 60; n++) {
+            Bytes f = eti_frame(n, fic.at(n));
+            all_taken &= m.processEtiFrame(1000, f.data(), f.size()) == 0;
+        }
+        check(all_taken && frames == 60 && lost == 0, "ETI frames with right CRCs are taken");
+        Bytes f = eti_frame(60, fic.at(60));
+        f[5] ^= 0x01;
+        check(m.processEtiFrame(1000, f.data(), f.size()) == 1 && frames == 60, "a frame with a damaged header is dropped");
+        f = eti_frame(61, fic.at(61));
+        f[40] ^= 0x10;
+        check(m.processEtiFrame(1000, f.data(), f.size()) == 2 && frames == 61 && lost == 1,
+              "a frame with damaged data goes on with its subchannels as lost");
+        Bytes cut(f.begin(), f.begin() + 100);
+        check(m.processEtiFrame(1000, cut.data(), cut.size()) == 1, "and a frame that ends before its data is dropped");
     }
     {
         // the same through a streamer: PAT and SDT follow

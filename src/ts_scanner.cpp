@@ -3,6 +3,7 @@
 #include <dvbdab/ts_scanner.hpp>
 #include "etina_pipeline.hpp"
 #include "dab_parser.h"
+#include "ensemble_manager.hpp"
 #include <array>
 #include <chrono>
 #include <fstream>
@@ -251,7 +252,9 @@ struct TsScanner::Impl {
 
                     // Feed to FIC parser
                     if (state.tsni_fic_parser) {
-                        state.tsni_fic_parser->process_eti_frame(frame.data(), frame.size());
+                        // (only frames whose CRCs are right: see EnsembleManager::processEtiFrame)
+                        if (EnsembleManager::checkEtiFrame(frame.data(), frame.size()) == 0)
+                            state.tsni_fic_parser->process_eti_frame(frame.data(), frame.size());
 
                         if (state.tsni_fic_parser->is_complete()) {
                             const auto& ens = state.tsni_fic_parser->get_ensemble();
@@ -326,7 +329,8 @@ struct TsScanner::Impl {
 
                     // Feed to FIC parser
                     if (state.etina_fic_parser) {
-                        state.etina_fic_parser->process_eti_frame(eti_ni, len);
+                        if (EnsembleManager::checkEtiFrame(eti_ni, len) == 0)
+                            state.etina_fic_parser->process_eti_frame(eti_ni, len);
 
                         // Check if FIC parser has all labels (full discovery complete)
                         if (state.etina_fic_parser->is_complete()) {

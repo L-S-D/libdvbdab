@@ -4,6 +4,7 @@
 #include <dvbdab/dvbdab_c.h>
 #include <dvbdab/ts_scanner.hpp>
 #include "etina_pipeline.hpp"
+#include "logging.h"
 #include "dab_parser.h"
 #include "output/dab_stream_processor.hpp"
 #include <algorithm>
@@ -283,6 +284,8 @@ struct dvbdab_streamer {
     // ETI-NA modular pipeline state
     EtinaPipelineState etina_pipeline;
     bool etina_detected{false};  // True once pipeline is producing ETI frames
+    int etina_bad_frames{0};     // frames with a wrong header in a row
+    bool etina_resync{false};    // search the E1 sync anew after this feed
 
     // Partial TS packet buffer for ETI-NA/TSNI (handles unaligned input chunks)
     std::vector<uint8_t> ts_buffer;
@@ -645,11 +648,25 @@ int dvbdab_streamer_feed(dvbdab_streamer_t *streamer, const uint8_t *data, size_
                     [streamer](const uint8_t* eti_ni, size_t len) {
                         if (!streamer->manager) return;
                         streamer->etina_detected = true;
-                        streamer->manager->processEtiFrame(streamer->config.pid, eti_ni, len);
+                        // Frames with a wrong header one after the other:
+                        // the E1 frames are out of step (a TS packet was
+                        // lost, 172 bytes of them). Search the sync anew.
+                        int r = streamer->manager->processEtiFrame(streamer->config.pid, eti_ni, len);
+                        if (r == 1) {
+                            if (++streamer->etina_bad_frames >= 8) streamer->etina_resync = true;
+                        } else {
+                            streamer->etina_bad_frames = 0;
+                        }
                     });
             });
 
         ts_buffer_consume(streamer->ts_buffer, consumed);
+        if (streamer->etina_resync) {
+            LOG_DEBUG(STREAM, "ETI-NA: frames out of step, the sync is searched anew");
+            streamer->etina_pipeline = EtinaPipelineState{};
+            streamer->etina_bad_frames = 0;
+            streamer->etina_resync = false;
+        }
         break;
     }
 

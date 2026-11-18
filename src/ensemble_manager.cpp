@@ -1,5 +1,7 @@
 #include "ensemble_manager.hpp"
 #include "parsers/udp_extractor.hpp"
+#include "utils/crc_utils.hpp"
+#include "logging.h"
 #include <arpa/inet.h>
 
 namespace dvbdab {
@@ -229,9 +231,46 @@ bool EnsembleManager::allComplete() const {
     return true;
 }
 
-void EnsembleManager::processEtiFrame(uint16_t pid, const uint8_t* eti_ni, size_t len) {
+// An ETI(NI) frame by its two CRCs (EN 300 799): 0 = right; 1 = the header
+// (frame characterization and stream characterization, up to the EOH CRC) is
+// damaged or says lengths the frame cannot have; 2 = the header is right, the
+// data (FIC and streams, up to the EOF CRC) is damaged
+int EnsembleManager::checkEtiFrame(const uint8_t* f, size_t len) {
+    if (len < 12) return 1;
+    size_t nst = f[5] & 0x7F;
+    size_t fl = static_cast<size_t>((f[6] & 0x07) << 8 | f[7]);  // in words: STC, EOH, MST
+    size_t eoh = 8 + nst * 4;                                      // MNSC, then the header CRC
+    if (eoh + 4 > len || fl < nst + 1) return 1;
+    if (CHECKSUMS_CHECKED && crc16_ccitt_xor(f + 4, eoh + 2 - 4) != static_cast<uint16_t>(f[eoh + 2] << 8 | f[eoh + 3])) return 1;
+    size_t mst = eoh + 4, mst_len = (fl - nst - 1) * 4;
+    if (mst + mst_len + 2 > len) return 1;
+    if (CHECKSUMS_CHECKED && crc16_ccitt_xor(f + mst, mst_len) != static_cast<uint16_t>(f[mst + mst_len] << 8 | f[mst + mst_len + 1])) return 2;
+    return 0;
+}
+
+int EnsembleManager::processEtiFrame(uint16_t pid, const uint8_t* eti_ni, size_t len) {
     // Use PID as key (ip=pid, port=0) for ETI-NA streams
     StreamKey key{static_cast<uint32_t>(pid), 0};
+
+    // A frame that came through ETI-NA or TS NI is what the TS packets
+    // made of it: with a packet lost it is too short, two frames in one, or
+    // out of step. Its CRCs say so. With a wrong header nothing in it can
+    // be trusted: dropped. With a right header and wrong data its
+    // subchannels count as lost in this frame (the decoders keep their time
+    // line), and its FIC is not read.
+    int check = checkEtiFrame(eti_ni, len);
+    eti_checked_++;
+    if (check == 1) {
+        eti_bad_header_++;
+        return check;
+    }
+    if (check == 2) {
+        eti_bad_data_++;
+        if (eti_ex_callback_ && basic_ready_flags_[key]) {
+            eti_ex_callback_(key, eti_ni, len, 0, ~uint64_t(0));
+        }
+        return check;
+    }
 
     // Get or create FIC parser for this PID
     auto it = etina_parsers_.find(pid);
@@ -273,6 +312,7 @@ void EnsembleManager::processEtiFrame(uint16_t pid, const uint8_t* eti_ni, size_
             complete_callback_(key, ensembles_[key]);
         }
     }
+    return 0;
 }
 
 } // namespace dvbdab
