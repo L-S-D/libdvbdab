@@ -20,8 +20,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # linked with libFuzzer when the compiler is clang. Never for a library to
 # install. See fuzz/README.md.
 option(DVBDAB_FUZZ "Fuzzing build: checksums count as right" OFF)
+set(DVBDAB_LIBFUZZER OFF)
 if(DVBDAB_FUZZ)
     add_compile_definitions(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        # libFuzzer: the library too is built with its coverage counters
+        set(DVBDAB_LIBFUZZER ON)
+        add_compile_options(-fsanitize=fuzzer-no-link)
+    endif()
 endif()
 
 # -DDVBDAB_SANITIZE=ON: library, tools and tests with AddressSanitizer and
@@ -292,14 +298,9 @@ add_executable(edi_extract
 # ----------------------------------------------------------------------------
 enable_testing()
 
-set(DVBDAB_LIBFUZZER OFF)
-if(DVBDAB_FUZZ AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(DVBDAB_LIBFUZZER ON)
-endif()
 foreach(f edi_stream eti_frames pad mot_epg ts_inputs)
     if(DVBDAB_LIBFUZZER)
         add_executable(fuzz_${f} fuzz/fuzz_${f}.cpp)
-        target_compile_options(fuzz_${f} PRIVATE -fsanitize=fuzzer)
         target_link_options(fuzz_${f} PRIVATE -fsanitize=fuzzer)
     else()
         add_executable(fuzz_${f} fuzz/fuzz_${f}.cpp fuzz/standalone.cpp)

@@ -119,15 +119,15 @@ def edi_seeds():
         sf = superframe(0x40 + s)
         frames += [sf[f * 72:(f + 1) * 72] for f in range(5)]
     afs = [af(i, fr) for i, fr in enumerate(frames)]
-    write("edi_stream", "af-adts.bin", bytes([0]) + records(afs))
-    write("edi_stream", "af-latm.bin", bytes([1]) + records(afs))
+    write("edi_stream", "af-adts.seed", bytes([0]) + records(afs))
+    write("edi_stream", "af-latm.seed", bytes([1]) + records(afs))
     pfs = []
     for i, a in enumerate(afs):
         h = len(a) // 2
         pfs += [pf(100 + i, 0, 2, a[:h]), pf(100 + i, 1, 2, a[h:])]
-    write("edi_stream", "pf.bin", bytes([0]) + records(pfs))
+    write("edi_stream", "pf.seed", bytes([0]) + records(pfs))
     # with every seventh fragment lost
-    write("edi_stream", "pf-loss.bin", bytes([1]) + records([p for i, p in enumerate(pfs) if i % 7 != 3]))
+    write("edi_stream", "pf-loss.seed", bytes([1]) + records([p for i, p in enumerate(pfs) if i % 7 != 3]))
 
 
 # ---- ETI frames: DAB+ on subchannel 0, DAB on 1, packet mode data on 2 ----
@@ -183,8 +183,8 @@ def eti_seeds():
                 fr[off:off + len(sub)] = sub
                 off += len(sub)
             frames += fr
-    write("eti_frames", "three-subchannels-adts.bin", bytes([0, 12]) + frames)
-    write("eti_frames", "three-subchannels-latm.bin", bytes([1, 12]) + frames)
+    write("eti_frames", "three-subchannels-adts.seed", bytes([0, 12]) + frames)
+    write("eti_frames", "three-subchannels-latm.seed", bytes([1, 12]) + frames)
 
 
 # ---- PAD: dynamic label segments in a variable size X-PAD ----
@@ -213,7 +213,7 @@ def pad_seeds():
         dlplus = bytes([0x12, (toggle << 7) | 3, 0x00, 1, 9, 4])
         out += pad_frame(dlplus + struct.pack(">H", crc16(dlplus)))
     out += bytes([255])  # lost frames
-    write("pad", "labels.bin", out)
+    write("pad", "labels.seed", out)
 
 
 # ---- packet mode / MOT, and an EHB file ----
@@ -223,10 +223,10 @@ def mot_seeds():
     for seg in range(3):
         stream += packets_of(7, data_group(4, seg, seg == 2, 0x0202, bytes([0, 30]) + bytes([0x41 + seg]) * 30))
     stream += packets_of(7, data_group(3, 0, True, 0x0202, bytes([0, 12]) + bytes(7) + b"\xCC\x09\x00test.EHB"))
-    write("mot_epg", "packets.bin", bytes([0]) + stream)
+    write("mot_epg", "packets.seed", bytes([0]) + stream)
     # TLV as TS 102 371: an EPG element with a token table and a string
     ehb = bytes([0x02, 0x10, 0x04, 0x06, 0x01, 0x04]) + b"News" + bytes([0x1C, 0x06, 0x01]) + b" at 9"
-    write("mot_epg", "ehb.bin", bytes([1]) + ehb)
+    write("mot_epg", "ehb.seed", bytes([1]) + ehb)
 
 
 # ---- TS for the ETI-NA and TS NI inputs and the scanner ----
@@ -237,7 +237,7 @@ def ts_seeds():
         for i in range(24):
             pkt = bytearray([0x47, 0x40 if i % 8 == 0 else 0x00, 0x00, 0x10 | (i & 15)]) + bytes([(i * 7 + k) & 0xFF for k in range(184)])
             ts += pkt
-        write("ts_inputs", "ts-mode%d.bin" % mode, bytes([mode, 0]) + ts)
+        write("ts_inputs", "ts-mode%d.seed" % mode, bytes([mode, 0]) + ts)
 
 
 if __name__ == "__main__":
