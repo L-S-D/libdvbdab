@@ -7,6 +7,7 @@
 #include <neaacdec.h>
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/version.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/mathematics.h>
 }
@@ -239,7 +240,23 @@ AacTranscoder::AacTranscoder(int /*bitrate*/, Output out)
 AacTranscoder::~AacTranscoder() = default;
 
 bool AacTranscoder::available() {
-    return true;
+    // The program this is linked into may bring a libavcodec of its own (a
+    // bundled FFmpeg): another major version than the headers this was
+    // built with has other structures, and using it would write past them.
+    static const bool ok = [] {
+        unsigned linked = avcodec_version() >> 16;
+        if (linked != LIBAVCODEC_VERSION_MAJOR) {
+            LOG_ERROR(TRANSCODE, "libavcodec " << linked << " is linked, the library was built with "
+                      << LIBAVCODEC_VERSION_MAJOR << ": no transcoding");
+            return false;
+        }
+        if (!avcodec_find_encoder(AV_CODEC_ID_AAC)) {
+            LOG_ERROR(TRANSCODE, "the libavcodec that is linked has no AAC encoder: no transcoding");
+            return false;
+        }
+        return true;
+    }();
+    return ok;
 }
 
 void AacTranscoder::feed(const uint8_t* adts, size_t len, int64_t au_slot, const DabPlusParams& params) {

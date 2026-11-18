@@ -62,7 +62,14 @@ void DabStreamProcessor::setEnsemble(uint16_t eid, const std::string& name, cons
 }
 
 void DabStreamProcessor::setAacOutput(int mode) {
-    aac_output_ = (mode == 2 && !AacTranscoder::available()) ? 0 : mode;
+    if (mode == 2 && !AacTranscoder::available()) {
+        // said once per streamer: the audio then plays too slow on players
+        // that take the 960 samples of an AU for 1024
+        LOG_WARN(MUXER, "DAB+ transcoding was asked for and is not there (the library was built without it, "
+                 "or another libavcodec is linked): the audio goes out as ADTS");
+        mode = 0;
+    }
+    aac_output_ = mode;
 }
 
 void DabStreamProcessor::setWantedPids(const uint16_t* pids, int count) {
