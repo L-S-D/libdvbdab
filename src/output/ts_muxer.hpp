@@ -114,6 +114,12 @@ public:
      */
     void addService(const TsService& service);
 
+    /**
+     * @brief Remove a service (it left the ensemble): the PAT and SDT get a
+     *        new version without it
+     */
+    void removeService(uint16_t sid);
+
     /// True if a service with this ID is part of the multiplex
     bool hasService(uint16_t sid) const { return sid_to_index_.count(sid) != 0; }
 

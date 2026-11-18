@@ -109,6 +109,24 @@ void DabStreamProcessor::addService(const TsService& service) {
     muxer_.addService(svc);
 }
 
+void DabStreamProcessor::removeService(uint16_t sid) {
+    for (auto it = services_.begin(); it != services_.end(); ++it) {
+        if (it->sid != sid) continue;
+        uint8_t subch = it->subchannel_id;
+        stopService(subch);
+        subch_to_sid_.erase(subch);
+        last_dls_.erase(subch);
+        last_dlplus_.erase(subch);
+        services_.erase(it);
+        break;
+    }
+    muxer_.removeService(sid);
+}
+
+bool DabStreamProcessor::isStarted(uint8_t subchannel_id) const {
+    return dabplus_decoders_.count(subchannel_id) != 0 || mp2_decoders_.count(subchannel_id) != 0;
+}
+
 void DabStreamProcessor::startService(uint8_t subchannel_id) {
     const TsService* svc = nullptr;
     for (const auto& s : services_) {

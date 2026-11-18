@@ -108,6 +108,11 @@ public:
     /// Check if basic service info is ready (FIG 0/1 + 0/2 parsed, can start audio)
     bool is_basic_ready() const { return basic_ready_; }
 
+    /// Goes up with every change of the ensemble (a service added or gone,
+    /// on another subchannel, with another codec, bitrate or label; the
+    /// ensemble label): the FIC is read as long as the stream runs
+    uint32_t revision() const { return revision_; }
+
     /// Get EPG subchannel(s) detected from FIG 0/13 + FIG 0/8
     const std::vector<int>& get_epg_subchannels() const { return epg_subchannels_; }
 
@@ -176,6 +181,17 @@ private:
     int fig11_count_ = 0;
 
     void build_ensemble();
+    void drop_stale();
+
+    // FIC frames: the count, where each service and subchannel was last in
+    // FIG 0/2 or 0/1, and when the first service came
+    static constexpr int64_t STALE_FRAMES = 500;       // 12 s
+    static constexpr int64_t READY_WAIT_FRAMES = 250;  // 6 s
+    int64_t fic_frame_ = 0;
+    int64_t first_service_frame_ = -1;
+    std::map<uint32_t, int64_t> service_seen_;
+    std::map<int, int64_t> subch_seen_;
+    uint32_t revision_ = 0;
 };
 
 } // namespace dvbdab

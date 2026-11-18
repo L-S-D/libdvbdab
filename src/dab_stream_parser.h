@@ -107,6 +107,12 @@ public:
     // Check if basic service info is ready
     bool is_basic_ready() const;
 
+    /// Goes up with every change of the ensemble (see DABParser::revision())
+    uint32_t ensemble_revision() const;
+
+    /// ETI frames made so far
+    int64_t eti_frame_count() const { return static_cast<int64_t>(eti_count_); }
+
     // Check if parser has received any useful data
     bool has_data() const;
 

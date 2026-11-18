@@ -30,10 +30,40 @@ uint32_t TsMuxer::dvbCrc32(const uint8_t* data, size_t len) {
 }
 
 void TsMuxer::setEnsemble(uint16_t tsid, const std::string& name, const std::string& provider) {
+    // a new label of the ensemble is the provider of its services
+    if (provider != provider_name_) {
+        bool changed = false;
+        for (auto& s : services_) {
+            if (s.provider == provider_name_ && s.provider != provider) {
+                s.provider = provider;
+                changed = true;
+            }
+        }
+        if (changed) sdt_version_ = (sdt_version_ + 1) & 0x1F;
+    }
     tsid_ = tsid;
     ensemble_name_ = name;
     provider_name_ = provider;
     onid_ = tsid;  // Use same as TSID for simplicity
+}
+
+void TsMuxer::removeService(uint16_t sid) {
+    auto it = sid_to_index_.find(sid);
+    if (it == sid_to_index_.end()) return;
+    services_.erase(services_.begin() + static_cast<std::ptrdiff_t>(it->second));
+    sid_to_index_.clear();
+    subch_to_sid_.clear();
+    for (size_t i = 0; i < services_.size(); i++) {
+        sid_to_index_[services_[i].sid] = i;
+        subch_to_sid_[services_[i].subchannel_id] = services_[i].sid;
+    }
+    audio_buffers_.erase(sid);
+    frame_step_.erase(sid);
+    last_audio_pts_.erase(sid);
+    radio_text_.erase(sid);
+    // the PAT and SDT no longer list it
+    pat_version_ = (pat_version_ + 1) & 0x1F;
+    sdt_version_ = (sdt_version_ + 1) & 0x1F;
 }
 
 void TsMuxer::addService(const TsService& service) {
@@ -53,7 +83,7 @@ void TsMuxer::addService(const TsService& service) {
 
 void TsMuxer::updateServiceLabel(uint16_t sid, const std::string& name) {
     auto it = sid_to_index_.find(sid);
-    if (it != sid_to_index_.end()) {
+    if (it != sid_to_index_.end() && services_[it->second].name != name) {
         services_[it->second].name = name;
         sdt_version_ = (sdt_version_ + 1) & 0x1F;
     }

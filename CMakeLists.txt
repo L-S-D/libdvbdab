@@ -131,6 +131,7 @@ add_executable(test_ensemble_discovery
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
 )
@@ -142,6 +143,7 @@ add_executable(test_ip_checks
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
 )
@@ -182,6 +184,7 @@ add_executable(test_packet_mode
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
+    src/output/charsets.cpp
     src/dab_stream_parser.cpp
     src/logging.cpp
 )
@@ -315,7 +318,7 @@ endforeach()
 # ----------------------------------------------------------------------------
 if(NOT DVBDAB_FUZZ)
 
-foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits)
+foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits test_ensemble_changes)
     add_executable(${t} tests/${t}.cpp)
     target_link_libraries(${t} dvbdab)
     add_test(NAME ${t} COMMAND ${t})

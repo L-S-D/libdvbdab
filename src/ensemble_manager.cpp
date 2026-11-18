@@ -13,7 +13,30 @@ void EnsembleManager::reset() {
     basic_ready_flags_.clear();
     complete_flags_.clear();
     last_subchannel_map_.clear();
+    reported_.clear();
     complete_count_ = 0;
+}
+
+// The ensemble of a stream after it was reported as basic ready: a revision
+// that has stayed the same for a few frames and is not the one reported goes
+// to the changed callback. report_now: this state was just reported.
+void EnsembleManager::noteRevision(const StreamKey& key, uint32_t revision, const DABEnsemble& ensemble,
+                                   int64_t frame, bool report_now) {
+    Reported& r = reported_[key];
+    if (report_now) {
+        r.revision = r.seen = revision;
+        r.since = frame;
+        return;
+    }
+    if (revision != r.seen) {
+        r.seen = revision;
+        r.since = frame;
+        return;
+    }
+    if (revision == r.revision || frame - r.since < CHANGE_SETTLE_FRAMES) return;
+    r.revision = revision;
+    ensembles_[key] = ensemble;
+    if (changed_callback_) changed_callback_(key, ensemble);
 }
 
 DABStreamParser& EnsembleManager::getParser(const StreamKey& key) {
@@ -74,6 +97,9 @@ void EnsembleManager::processUdp(uint32_t dst_ip, uint16_t dst_port, const uint8
         if (basic_ready_callback_) {
             basic_ready_callback_(key, parser.get_ensemble());
         }
+        noteRevision(key, parser.ensemble_revision(), parser.get_ensemble(), parser.eti_frame_count(), true);
+    } else if (basic_ready_flags_[key]) {
+        noteRevision(key, parser.ensemble_revision(), parser.get_ensemble(), parser.eti_frame_count(), false);
     }
 
     // Check for full completion (all labels available)
@@ -225,6 +251,9 @@ void EnsembleManager::processEtiFrame(uint16_t pid, const uint8_t* eti_ni, size_
         if (basic_ready_callback_) {
             basic_ready_callback_(key, parser.get_ensemble());
         }
+        noteRevision(key, parser.revision(), parser.get_ensemble(), ++reported_[key].frames, true);
+    } else if (basic_ready_flags_[key]) {
+        noteRevision(key, parser.revision(), parser.get_ensemble(), ++reported_[key].frames, false);
     }
 
     // THEN fire ETI callback (muxer_initialized will be true on the frame basic_ready becomes true)

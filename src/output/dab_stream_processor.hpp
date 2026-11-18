@@ -29,6 +29,15 @@ public:
     // Add a service
     void addService(const TsService& service);
 
+    // Remove a service (it left the ensemble, or comes again as another one)
+    void removeService(uint16_t sid);
+
+    // The services as they were added
+    const std::vector<TsService>& getServices() const { return services_; }
+
+    // Whether the service of this subchannel is started
+    bool isStarted(uint8_t subchannel_id) const;
+
     // True if the service / sub-channel was added
     bool hasService(uint16_t sid) const { return muxer_.hasService(sid); }
     bool hasSubchannel(uint8_t subchannel_id) const { return subch_to_sid_.count(subchannel_id) != 0; }

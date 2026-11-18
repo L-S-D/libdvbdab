@@ -2,6 +2,7 @@
 #include "logging.h"
 #include "utils/crc_utils.hpp"
 #include "utils/byte_utils.hpp"
+#include "output/charsets.hpp"
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
@@ -9,22 +10,29 @@
 
 namespace dvbdab {
 
-// Bitrate tables from ETSI EN 300 401
-static const int uep_bitrates[] = {
-    32, 32, 32, 32, 32,   // indices 0-4
-    48, 48, 48, 48, 48,   // indices 5-9
-    56, 56, 56, 56,       // indices 10-13
-    64, 64, 64, 64, 64, 64, 64,  // indices 14-20
-    80, 80, 80, 80, 80, 80,      // indices 21-26
-    96, 96, 96, 96, 96, 96,      // indices 27-32
-    112, 112, 112, 112,   // indices 33-36
-    128, 128, 128, 128, 128, 128, 128, // indices 37-43
-    160, 160, 160, 160, 160, 160, // indices 44-49
-    192, 192, 192, 192, 192, 192, 192, // indices 50-56
-    224, 224, 224, 224, 224, // indices 57-61
-    256, 256, 256          // indices 62-64
+// Short form of FIG 0/1 (UEP): size in capacity units, protection level and
+// bitrate of each table index (ETSI EN 300 401, table 8)
+static const int uep_sizes[64] = {
+     16,  21,  24,  29,  35,  24,  29,  35,  42,  52,  29,  35,  42,  52,  32,  42,
+     48,  58,  70,  40,  52,  58,  70,  84,  48,  58,  70,  84, 104,  58,  70,  84,
+    104,  64,  84,  96, 116, 140,  80, 104, 116, 140, 168,  96, 116, 140, 168, 208,
+    116, 140, 168, 208, 232, 128, 168, 192, 232, 280, 160, 208, 280, 192, 280, 416
+};
+static const int uep_levels[64] = {
+    5, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3, 2, 5, 4,
+    3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3,
+    2, 5, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 3, 2, 1,
+    5, 4, 3, 2, 1, 5, 4, 3, 2, 1, 5, 4, 2, 5, 3, 1
+};
+static const int uep_bitrates[64] = {
+     32,  32,  32,  32,  32,  48,  48,  48,  48,  48,  56,  56,  56,  56,  64,  64,
+     64,  64,  64,  80,  80,  80,  80,  80,  96,  96,  96,  96,  96, 112, 112, 112,
+    112, 128, 128, 128, 128, 128, 160, 160, 160, 160, 160, 192, 192, 192, 192, 192,
+    224, 224, 224, 224, 224, 256, 256, 256, 256, 256, 320, 320, 320, 384, 384, 384
 };
 
+// Long form (EEP): a subchannel of n times 8 kbit/s (set A) or 32 kbit/s (set B)
+// has n times so many capacity units at its protection level
 static int get_eep_bitrate(int subchsz, int protlvl) {
     int n = 0;
     switch (protlvl) {
@@ -32,116 +40,27 @@ static int get_eep_bitrate(int subchsz, int protlvl) {
         case 1: n = subchsz / 8; break;   // EEP-2A
         case 2: n = subchsz / 6; break;   // EEP-3A
         case 3: n = subchsz / 4; break;   // EEP-4A
-        case 4: n = subchsz / 27; break;  // EEP-1B
-        case 5: n = subchsz / 21; break;  // EEP-2B
-        case 6: n = subchsz / 18; break;  // EEP-3B
-        case 7: n = subchsz / 15; break;  // EEP-4B
+        case 4: return subchsz / 27 * 32;  // EEP-1B
+        case 5: return subchsz / 21 * 32;  // EEP-2B
+        case 6: return subchsz / 18 * 32;  // EEP-3B
+        case 7: return subchsz / 15 * 32;  // EEP-4B
         default: return 0;
     }
     return n * 8;
 }
 
-// EBU Latin character set to Unicode mapping (ETSI EN 300 401 Annex C)
-// Characters 0x80-0x9F differ from ISO 8859-1
-static const uint16_t ebu_latin_table[256] = {
-    // 0x00-0x7F: Same as ASCII
-    0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
-    0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F,
-    0x0010, 0x0011, 0x0012, 0x0013, 0x0014, 0x0015, 0x0016, 0x0017,
-    0x0018, 0x0019, 0x001A, 0x001B, 0x001C, 0x001D, 0x001E, 0x001F,
-    0x0020, 0x0021, 0x0022, 0x0023, 0x00A4, 0x0025, 0x0026, 0x0027,  // 0x24 = currency sign
-    0x0028, 0x0029, 0x002A, 0x002B, 0x002C, 0x002D, 0x002E, 0x002F,
-    0x0030, 0x0031, 0x0032, 0x0033, 0x0034, 0x0035, 0x0036, 0x0037,
-    0x0038, 0x0039, 0x003A, 0x003B, 0x003C, 0x003D, 0x003E, 0x003F,
-    0x0040, 0x0041, 0x0042, 0x0043, 0x0044, 0x0045, 0x0046, 0x0047,
-    0x0048, 0x0049, 0x004A, 0x004B, 0x004C, 0x004D, 0x004E, 0x004F,
-    0x0050, 0x0051, 0x0052, 0x0053, 0x0054, 0x0055, 0x0056, 0x0057,
-    0x0058, 0x0059, 0x005A, 0x005B, 0x005C, 0x005D, 0x005E, 0x005F,
-    0x0060, 0x0061, 0x0062, 0x0063, 0x0064, 0x0065, 0x0066, 0x0067,
-    0x0068, 0x0069, 0x006A, 0x006B, 0x006C, 0x006D, 0x006E, 0x006F,
-    0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,
-    0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x007E, 0x007F,
-    // 0x80-0x9F: EBU Latin special characters
-    0x00E1, 0x00E0, 0x00E9, 0x00E8, 0x00ED, 0x00EC, 0x00F3, 0x00F2,  // áàéèíìóò
-    0x00FA, 0x00F9, 0x00D1, 0x00C7, 0x015E, 0x00DF, 0x00A1, 0x0132,  // úùÑÇŞß¡Ĳ
-    0x00E2, 0x00E4, 0x00EA, 0x00EB, 0x00EE, 0x00EF, 0x00F4, 0x00F6,  // âäêëîïôö
-    0x00FB, 0x00FC, 0x00F1, 0x00E7, 0x015F, 0x011F, 0x0131, 0x0133,  // ûüñçşğıĳ
-    // 0xA0-0xBF
-    0x00AA, 0x03B1, 0x00A9, 0x2030, 0x011E, 0x011B, 0x0148, 0x0151,  // ªα©‰Ğěňő
-    0x03C0, 0x20AC, 0x00A3, 0x0024, 0x2190, 0x2191, 0x2192, 0x2193,  // π€£$←↑→↓
-    0x00BA, 0x00B9, 0x00B2, 0x00B3, 0x00B1, 0x0130, 0x0144, 0x0171,  // º¹²³±İńű
-    0x00B5, 0x00BF, 0x00F7, 0x00B0, 0x00BC, 0x00BD, 0x00BE, 0x00A7,  // µ¿÷°¼½¾§
-    // 0xC0-0xDF
-    0x00C1, 0x00C0, 0x00C9, 0x00C8, 0x00CD, 0x00CC, 0x00D3, 0x00D2,  // ÁÀÉÈÍÌÓÒ
-    0x00DA, 0x00D9, 0x0158, 0x010C, 0x0160, 0x017D, 0x00D0, 0x013F,  // ÚÙŘČŠŽÐĿ
-    0x00C2, 0x00C4, 0x00CA, 0x00CB, 0x00CE, 0x00CF, 0x00D4, 0x00D6,  // ÂÄÊËÎÏÔÖ
-    0x00DB, 0x00DC, 0x0159, 0x010D, 0x0161, 0x017E, 0x0111, 0x0140,  // ÛÜřčšžđŀ
-    // 0xE0-0xFF
-    0x00C3, 0x00C5, 0x00C6, 0x0152, 0x0177, 0x00DD, 0x00D5, 0x00D8,  // ÃÅÆŒŷÝÕØ
-    0x00DE, 0x014A, 0x0154, 0x0106, 0x015A, 0x0179, 0x0166, 0x00F0,  // ÞŊŔĆŚŹŦð
-    0x00E3, 0x00E5, 0x00E6, 0x0153, 0x0175, 0x00FD, 0x00F5, 0x00F8,  // ãåæœŵýõø
-    0x00FE, 0x014B, 0x0155, 0x0107, 0x015B, 0x017A, 0x0167, 0x00FF   // þŋŕćśźŧÿ
-};
-
-// Append Unicode codepoint as UTF-8
-static void append_utf8(std::string& result, uint16_t cp) {
-    if (cp < 0x80) {
-        result += static_cast<char>(cp);
-    } else if (cp < 0x800) {
-        result += static_cast<char>(0xC0 | (cp >> 6));
-        result += static_cast<char>(0x80 | (cp & 0x3F));
-    } else {
-        result += static_cast<char>(0xE0 | (cp >> 12));
-        result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-        result += static_cast<char>(0x80 | (cp & 0x3F));
-    }
-}
-
-// Convert EBU Latin (charset 0) to UTF-8
-static std::string ebu_latin_to_utf8(const char* src, size_t len) {
-    std::string result;
-    result.reserve(len * 3);
-
-    for (size_t i = 0; i < len && src[i] != '\0'; i++) {
-        unsigned char c = static_cast<unsigned char>(src[i]);
-        uint16_t cp = ebu_latin_table[c];
-        append_utf8(result, cp);
-    }
-    return result;
-}
-
-// Convert ISO 8859-1 (Latin-1) to UTF-8
-static std::string latin1_to_utf8(const char* src, size_t len) {
-    std::string result;
-    result.reserve(len * 2);
-
-    for (size_t i = 0; i < len && src[i] != '\0'; i++) {
-        unsigned char c = static_cast<unsigned char>(src[i]);
-        if (c < 0x80) {
-            result += c;
-        } else {
-            result += static_cast<char>(0xC0 | (c >> 6));
-            result += static_cast<char>(0x80 | (c & 0x3F));
-        }
-    }
-    return result;
-}
-
-// Convert DAB label to UTF-8 based on charset
+// A label of 16 bytes to UTF-8, by its character set (the same sets as
+// dynamic labels: complete EBU Latin, UCS-2, UTF-8). A set that is not
+// known is read as EBU Latin: a label with wrong letters is better than a
+// service without a name.
 static std::string dab_label_to_utf8(const char* src, size_t len, int charset) {
-    switch (charset) {
-        case 0:  // Complete EBU Latin
-        case 1:  // EBU Latin core
-        case 2:  // EBU Latin
-            return ebu_latin_to_utf8(src, len);
-        case 6:  // ISO 8859-1 (Latin-1)
-            return latin1_to_utf8(src, len);
-        case 15: // UTF-8
-            return std::string(src, strnlen(src, len));
-        default:
-            // Fall back to EBU Latin for unknown charsets
-            return ebu_latin_to_utf8(src, len);
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(src);
+    std::string out;
+    if (!dabLabelToUtf8(data, len, static_cast<uint8_t>(charset), out)) {
+        out.clear();
+        dabLabelToUtf8(data, len, DAB_CHARSET_EBU_LATIN, out);
     }
+    return out;
 }
 
 DABParser::DABParser() : ensemble_id_(0), labelled_(false), basic_ready_(false),
@@ -171,14 +90,18 @@ void DABParser::reset() {
     start_time_ = std::chrono::steady_clock::now();
     label_first_seen_ms_.clear();
     ensemble_label_first_seen_ms_ = -1;
+    fic_frame_ = 0;
+    first_service_frame_ = -1;
+    service_seen_.clear();
+    subch_seen_.clear();
 }
 
 bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
     eti_call_count_++;
 
-    if (labelled_) return true;
-
-    if (len < 8) return false;
+    // (The FIC is read as long as the stream runs: an ensemble changes -
+    // services come and go, move to another subchannel, get another name.)
+    if (len < 8) return labelled_;
 
     uint32_t sync = (frame[0] << 24) | (frame[1] << 16) | (frame[2] << 8) | frame[3];
     if (eti_call_count_ <= 5 || eti_call_count_ % 100 == 0) {
@@ -190,7 +113,7 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
                  << (int)frame[0] << " 0x" << (int)frame[1] << " 0x" << (int)frame[2]
                  << " 0x" << (int)frame[3] << " 0x" << (int)frame[4] << " 0x" << (int)frame[5]
                  << " 0x" << (int)frame[6] << " 0x" << (int)frame[7] << std::dec);
-        return false;
+        return labelled_;
     }
 
     ETI_FC fc = parse_fc(frame + 4);
@@ -210,9 +133,11 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
         return labelled_;
     }
 
+    fic_frame_++;
     process_fic(fic_data, fic_len, fc.mid);
 
     if (!service_map_.empty()) {
+        drop_stale();
         build_ensemble();
     }
 
@@ -220,6 +145,10 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
     if (!basic_ready_ && !service_map_.empty()) {
         size_t valid_services = 0;
         bool all_ready = true;
+        // ... or, after a while, the ones that have: a service whose
+        // subchannel never comes must not keep all the others silent
+        if (first_service_frame_ < 0) first_service_frame_ = fic_frame_;
+        bool waited = fic_frame_ - first_service_frame_ >= READY_WAIT_FRAMES;
 
         for (const auto& [sid, info] : service_map_) {
             if (info.primary_subch >= 0) {
@@ -232,7 +161,7 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
             }
         }
 
-        if (valid_services > 0 && all_ready) {
+        if (valid_services > 0 && (all_ready || waited)) {
             if (valid_services != last_basic_service_count_) {
                 last_basic_service_count_ = valid_services;
                 basic_stable_frames_ = 0;
@@ -267,15 +196,44 @@ bool DABParser::process_eti_frame(const uint8_t* frame, size_t len) {
 
         bool all_labelled = (labelled_count == service_map_.size() && has_ensemble_label);
         bool stable = (stable_frames_ >= 10);
+        // Labels that do not come (a service without FIG 1/1) must not keep
+        // the ensemble from ever being complete: after a while it is, with
+        // the names that are there (a late one is a change like any other)
+        bool waited = basic_ready_ && stable_frames_ >= READY_WAIT_FRAMES;
 
-        if (all_labelled && stable) {
+        if (!labelled_ && stable && (all_labelled || waited)) {
             labelled_ = true;
-            LOG_INFO(FIC, "DAB COMPLETE: " << service_map_.size() << " services with labels, ensemble='" << ensemble_label_ << "'");
-            return true;
+            LOG_INFO(FIC, "DAB COMPLETE: " << service_map_.size() << " services, " << labelled_count
+                     << " with labels, ensemble='" << ensemble_label_ << "'");
         }
     }
 
-    return false;
+    return labelled_;
+}
+
+// Services and subchannels the FIC no longer has: FIG 0/1 and 0/2 come ten
+// times a second, what was not in them for STALE_FRAMES frames is gone
+void DABParser::drop_stale() {
+    for (auto it = service_map_.begin(); it != service_map_.end();) {
+        auto seen = service_seen_.find(it->first);
+        if (seen != service_seen_.end() && fic_frame_ - seen->second > STALE_FRAMES) {
+            LOG_DEBUG(FIC, "service 0x" << std::hex << it->first << std::dec << " is gone");
+            service_labels_.erase(it->first);
+            service_seen_.erase(seen);
+            it = service_map_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = subchannels_.begin(); it != subchannels_.end();) {
+        auto seen = subch_seen_.find(it->first);
+        if (seen != subch_seen_.end() && fic_frame_ - seen->second > STALE_FRAMES) {
+            subch_seen_.erase(seen);
+            it = subchannels_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 void DABParser::process_fic(const uint8_t* fic_data, int fic_len, int /*mode_id*/) {
@@ -344,6 +302,11 @@ void DABParser::process_fig(const uint8_t* fig, int fig_len) {
         ext = fig[0] & 0x1F;
         pd = (fig[0] >> 5) & 0x01;
         charset = 0;
+        // C/N = 1 in the FIGs of the multiplex configuration: the next
+        // configuration, sent for six seconds before a reconfiguration. It
+        // becomes the current one (C/N = 0) at the change; until then it
+        // must not be mixed into what is on air.
+        if ((fig[0] & 0x80) && (ext == 1 || ext == 2 || ext == 3 || ext == 4 || ext == 8)) return;
     } else if (fig_type == 1) {
         // FIG 1: ext in bits 0-2, OE in bit 3, charset in bits 4-7
         ext = fig[0] & 0x07;
@@ -393,7 +356,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                 int startaddr = ((data[pos] & 0x03) << 8) | data[pos + 1];
                 int form = (data[pos + 2] >> 7) & 0x01;
 
-                SubChannel sc;
+                SubChannel sc{};
                 sc.subchid = subchid;
                 sc.startaddr = startaddr;
                 if (subchannels_.count(subchid)) {
@@ -413,10 +376,9 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                     int table_index = data[pos + 2] & 0x3F;
                     sc.eepprot = 0;
                     sc.uep_indx = table_index;
-                    if (table_index < 64) {
-                        sc.bitrate = uep_bitrates[table_index];
-                    }
-                    sc.subchsz = 0;
+                    sc.bitrate = uep_bitrates[table_index];
+                    sc.subchsz = uep_sizes[table_index];
+                    sc.protlvl = uep_levels[table_index];
                     pos += 3;
                 } else {
                     if (pos + 4 > len) break;
@@ -432,6 +394,7 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                 }
 
                 subchannels_[subchid] = sc;
+                subch_seen_[subchid] = fic_frame_;
             }
             break;
         }
@@ -497,15 +460,17 @@ void DABParser::process_fig_0(const uint8_t* data, int len, int ext, int pd) {
                                  << " primary=" << primary
                                  << " (packet mode)");
 
-                        if (primary && info.primary_subch < 0) {
-                            info.primary_subch = subchid;
-                        }
+                        // (not taken as the subchannel of the service: a
+                        // data service is no radio programme, and waiting
+                        // for its audio codec kept the whole ensemble silent)
+                        (void)primary;
                     }
                     pos += 2;
                 }
 
                 if (info.primary_subch >= 0) {
                     service_map_[sid] = info;
+                    service_seen_[sid] = fic_frame_;
                     fig02_count_++;
                     LOG_DEBUG(FIC, "FIG 0/2: Found service SID=0x" << std::hex << sid
                              << " subch=" << std::dec << info.primary_subch
@@ -714,34 +679,49 @@ void DABParser::process_fig_1(const uint8_t* data, int len, int ext, int charset
 }
 
 void DABParser::build_ensemble() {
-    ensemble_.eid = ensemble_id_;
-    ensemble_.label = ensemble_label_;
-    ensemble_.services.clear();
+    DABEnsemble e;
+    e.eid = ensemble_id_;
+    e.label = ensemble_label_;
+    e.source_ip = ensemble_.source_ip;
+    e.source_port = ensemble_.source_port;
 
     for (const auto& [sid, info] : service_map_) {
         if (info.primary_subch < 0) continue;
+
+        // only with its subchannel and codec known (FIG 0/1 and 0/2)
+        auto it = subchannels_.find(info.primary_subch);
+        if (it == subchannels_.end() || !it->second.codec_known) continue;
 
         DABService svc;
         svc.sid = sid;
         svc.label = service_labels_.count(sid) ? service_labels_[sid] : "";
 
-        auto it = subchannels_.find(info.primary_subch);
-        if (it != subchannels_.end()) {
-            const SubChannel& sc = it->second;
-            svc.subchannel_id = sc.subchid;
-            svc.start_addr = sc.startaddr;
-            svc.subchannel_size = sc.subchsz;
-            svc.bitrate = sc.bitrate;
-            svc.dabplus = (sc.dabplus == 1);
-            svc.protection_level = sc.protlvl;
-            svc.eep_protection = (sc.eepprot == 1);
-        }
+        const SubChannel& sc = it->second;
+        svc.subchannel_id = sc.subchid;
+        svc.start_addr = sc.startaddr;
+        svc.subchannel_size = sc.subchsz;
+        svc.bitrate = sc.bitrate;
+        svc.dabplus = (sc.dabplus == 1);
+        svc.protection_level = sc.protlvl;
+        svc.eep_protection = (sc.eepprot == 1);
 
-        ensemble_.services.push_back(svc);
+        e.services.push_back(svc);
     }
 
-    std::sort(ensemble_.services.begin(), ensemble_.services.end(),
+    std::sort(e.services.begin(), e.services.end(),
               [](const DABService& a, const DABService& b) { return a.sid < b.sid; });
+
+    // A change of what a receiver must know (not of where in the frame a
+    // subchannel lies): the revision goes up
+    auto same = [](const DABService& a, const DABService& b) {
+        return a.sid == b.sid && a.label == b.label && a.bitrate == b.bitrate &&
+               a.subchannel_id == b.subchannel_id && a.dabplus == b.dabplus;
+    };
+    bool changed = e.eid != ensemble_.eid || e.label != ensemble_.label ||
+                   e.services.size() != ensemble_.services.size() ||
+                   !std::equal(e.services.begin(), e.services.end(), ensemble_.services.begin(), same);
+    ensemble_ = std::move(e);
+    if (changed) revision_++;
 
     LOG_DEBUG(FIC, "Parsed ensemble '" << ensemble_.label << "' (0x"
              << std::hex << ensemble_.eid << std::dec << ") with "

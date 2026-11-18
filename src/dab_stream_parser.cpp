@@ -618,6 +618,10 @@ bool DABStreamParser::is_complete() const {
     return fic_parser_.is_complete();
 }
 
+uint32_t DABStreamParser::ensemble_revision() const {
+    return fic_parser_.revision();
+}
+
 bool DABStreamParser::is_basic_ready() const {
     return fic_parser_.is_basic_ready();
 }

@@ -14,6 +14,12 @@ using EnsembleBasicReadyCallback = std::function<void(const StreamKey& key, cons
 // Callback when an ensemble is complete (all services have labels)
 using EnsembleCompleteCallback = std::function<void(const StreamKey& key, const DABEnsemble& ensemble)>;
 
+// Callback for an ensemble that changed after it was "basic ready": a service
+// added or gone, on another subchannel, with another codec, bitrate or label,
+// another ensemble label. Called once the change has settled (the FIGs of a
+// new configuration come one after the other).
+using EnsembleChangedCallback = std::function<void(const StreamKey& key, const DABEnsemble& ensemble)>;
+
 // Callback for ETI frames (optional, for output)
 // dflc = Data Flow Counter (0-7999) for continuity checking
 using EtiFrameCallback = std::function<void(const StreamKey& key, const uint8_t* data, size_t len, uint16_t dflc)>;
@@ -41,6 +47,11 @@ public:
     // Set callback for when an ensemble is complete (all labels available)
     void setCompleteCallback(EnsembleCompleteCallback callback) {
         complete_callback_ = std::move(callback);
+    }
+
+    // Set callback for changes of an ensemble after it was basic ready
+    void setChangedCallback(EnsembleChangedCallback callback) {
+        changed_callback_ = std::move(callback);
     }
 
     // Set callback for ETI frames (optional)
@@ -103,6 +114,20 @@ private:
 
     EnsembleBasicReadyCallback basic_ready_callback_;
     EnsembleCompleteCallback complete_callback_;
+    EnsembleChangedCallback changed_callback_;
+
+    // per stream: the revision of the ensemble that was reported, the one
+    // seen last and for how many frames it has been that
+    struct Reported {
+        uint32_t revision = 0;
+        uint32_t seen = 0;
+        int64_t since = 0;    // the frame `seen` was first seen at
+        int64_t frames = 0;   // frame count of streams that come as ETI frames
+    };
+    std::map<StreamKey, Reported> reported_;
+    static constexpr int64_t CHANGE_SETTLE_FRAMES = 12;
+    void noteRevision(const StreamKey& key, uint32_t revision, const DABEnsemble& ensemble, int64_t frame,
+                      bool report_now);
     EtiFrameCallback eti_callback_;
     EtiFrameExCallback eti_ex_callback_;
     SubchannelChangeCallback subchannel_change_callback_;
