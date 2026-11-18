@@ -8,7 +8,9 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
   - DAB+ (HE-AAC v2) superframe decoding: FireCode sync, AU CRC check (no
     Reed-Solomon correction)
   - DAB (MPEG-1 Layer II) frame extraction
-  - DLS (Dynamic Label Segment) extraction for now-playing info
+  - Dynamic labels (DLS) and their DL Plus tags from the PAD of DAB+ and DAB
+    (MPEG Layer II) audio: data groups checked by their CRC, a label only when
+    all its segments came; EBU Latin, UCS-2 and UTF-8 labels
 
 - **Lost frames**
   - The frame counter of the ETI frames (FCT) tells lost frames. A DAB+

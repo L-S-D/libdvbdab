@@ -85,6 +85,10 @@ public:
     size_t getDataSubchannelCount() const { return data_subchannels_.size(); }
 
 private:
+    // the dynamic label and DL Plus tags of a service (DAB+ or DAB)
+    void onLabel(uint8_t subchannel_id, const std::string& text);
+    void onDLPlus(uint8_t subchannel_id, const std::string& text, const std::vector<DLPlusTag>& tags);
+
     // Called when EHB parser produces a schedule
     void onScheduleParsed(const ServiceSchedule& schedule);
 
@@ -117,6 +121,7 @@ private:
     // frame number each MP2 subchannel got
     int aac_output_{0};
     std::map<uint8_t, std::unique_ptr<AacTranscoder>> transcoders_;
+    std::map<uint8_t, std::string> last_dls_, last_dlplus_;  // per subchannel, for the log
     bool wanted_all_{true};
     std::set<uint16_t> wanted_pids_;
     bool isWanted(const TsService& svc) const;

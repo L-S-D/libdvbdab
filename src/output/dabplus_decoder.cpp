@@ -64,6 +64,7 @@ void DabPlusDecoder::reset() {
     if (pad_decoder_) {
         pad_decoder_->reset();
     }
+    pad_next_slot_ = -1;
 }
 
 bool DabPlusDecoder::checkFireCode(const uint8_t* buf) {
@@ -319,12 +320,6 @@ void DabPlusDecoder::processSuperframe() {
     params_.ps_flag = (sf[2] & 0x08) != 0;
     params_.mpeg_surround = sf[2] & 0x07;
 
-    // Configure PAD decoder with audio parameters (for FDK-AAC DSE extraction)
-    if (pad_decoder_ && superframe_count_ == 1) {
-        pad_decoder_->configure(params_.dac_rate, params_.sbr_flag,
-                                params_.ps_flag, params_.aac_channel_mode);
-    }
-
     // Number of AUs based on dac_rate and sbr_flag
     static const int au_count_table[4] = {4, 2, 6, 3};
     params_.num_aus = au_count_table[(params_.dac_rate ? 2 : 0) | (params_.sbr_flag ? 1 : 0)];
@@ -447,10 +442,13 @@ void DabPlusDecoder::processSuperframe() {
         // AU data length excluding CRC
         size_t au_data_len = au_size[i] - 2;
 
-        // Extract PAD from raw AU using FDK-AAC (like dablin)
-        // FDK-AAC with TT_MP4_RAW expects raw AU data, not ADTS
+        // the PAD of the AU (in its data stream element); lost AUs before it
+        // break an X-PAD data group in progress
         if (pad_decoder_ && au_data_len >= 2) {
-            pad_decoder_->processPad(sf + au_start[i], au_data_len);
+            int64_t slot = sf_start_ * params_.num_aus / 5 + i;
+            if (pad_next_slot_ >= 0 && slot != pad_next_slot_) pad_decoder_->discontinuity();
+            pad_next_slot_ = slot + 1;
+            pad_decoder_->processAu(sf + au_start[i], au_data_len);
         }
 
         // Build ADTS frame and emit

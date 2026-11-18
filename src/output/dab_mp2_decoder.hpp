@@ -7,11 +7,16 @@
 #include <vector>
 #include <functional>
 #include <array>
+#include <memory>
+#include <string>
 
 namespace dvbdab {
 
 // Callback for MP2 frames
 using Mp2FrameCallback = std::function<void(const uint8_t* data, size_t len)>;
+
+class PadDecoder;
+struct DLPlusTag;
 
 // MP2 frame parameters
 struct Mp2Params {
@@ -28,10 +33,14 @@ struct Mp2Params {
 class DabMp2Decoder {
 public:
     explicit DabMp2Decoder(int bitrate);
-    ~DabMp2Decoder() = default;
+    ~DabMp2Decoder();  // in the .cpp, where PadDecoder is complete
 
     // Set callback for decoded MP2 frames
     void setCallback(Mp2FrameCallback cb) { callback_ = std::move(cb); }
+
+    // The dynamic label and its DL Plus tags from the PAD at the end of each frame
+    void setDLSCallback(std::function<void(const std::string& text)> cb);
+    void setDLPlusCallback(std::function<void(const std::string& text, const std::vector<DLPlusTag>& tags)> cb);
 
     // Feed subchannel frame data (24ms worth)
     // Returns number of MP2 frames extracted
@@ -65,6 +74,8 @@ private:
 
     // Buffer for incomplete frames
     std::vector<uint8_t> buffer_;
+
+    std::unique_ptr<PadDecoder> pad_;
 
     Mp2Params params_{};
     Mp2FrameCallback callback_;

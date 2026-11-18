@@ -38,6 +38,7 @@ add_library(dvbdab STATIC
     src/output/dabplus_decoder.cpp
     src/output/dab_mp2_decoder.cpp
     src/output/pad_decoder.cpp
+    src/output/charsets.cpp
     src/output/ts_muxer.cpp
     src/output/dab_stream_processor.cpp
     src/output/aac_transcoder.cpp
@@ -133,6 +134,7 @@ add_executable(test_stream_processor
     src/output/dabplus_decoder.cpp
     src/output/dab_mp2_decoder.cpp
     src/output/pad_decoder.cpp
+    src/output/charsets.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/packet_decoder.cpp
     src/parsers/ehb_parser.cpp
@@ -183,6 +185,7 @@ add_executable(test_audio_extract
     src/edi_parser.cpp
     src/output/dabplus_decoder.cpp
     src/output/pad_decoder.cpp
+    src/output/charsets.cpp
     src/output/dab_mp2_decoder.cpp
     src/logging.cpp
 )

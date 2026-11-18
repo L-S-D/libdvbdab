@@ -1,838 +1,295 @@
-// PAD (Programme Associated Data) decoder for DAB+
-// References: ETSI EN 300 401, ETSI TS 102 980, ETSI TS 102 563
-//
-// Key insight from dablin: X-PAD bytes in DAB+ DSE are stored in REVERSE order
-// and must be reversed before parsing.
+// PAD (Programme Associated Data) of DAB and DAB+ audio: dynamic labels and DL Plus
+// References: ETSI EN 300 401 (clause 7.4), ETSI TS 102 980, ETSI TS 102 563
 
 #include "pad_decoder.hpp"
+#include "charsets.hpp"
 #include "../logging.h"
+
 #include <algorithm>
-#include <cctype>
 
 namespace dvbdab {
 
-// X-PAD data field length table (ETSI EN 300 401, Table 9)
-// Index from CI bits 7-5, gives data field length
-static const size_t xpad_len_table[8] = {4, 6, 8, 12, 16, 24, 32, 48};
+namespace {
 
-// X-PAD Application Type for Data Groups (Table 11)
-// App Type 2 = DLS start, App Type 3 = DLS continuation
-// App Type 12 = MOT (Multimedia Object Transfer)
-// App Type 13 = MOT (continuation)
+// X-PAD data subfield lengths by the length indicator of a contents indicator (table 26)
+constexpr size_t XPAD_SUBFIELD_LEN[8] = {4, 6, 8, 12, 16, 24, 32, 48};
 
-// EBU Latin (charset 0) to UTF-8 conversion table
-// Based on ETSI TS 101 756 Annex C / ETSI EN 300 706 Table 36
-// Complete EBU Latin character set for DAB
-static std::string ebuLatinToUtf8(const char* src, size_t len) {
-    std::string result;
-    result.reserve(len * 2);  // UTF-8 may need more bytes
+// X-PAD application types (table 27)
+constexpr uint8_t APP_DL_START = 2;
+constexpr uint8_t APP_DL_CONT = 3;
 
-    for (size_t i = 0; i < len; i++) {
-        uint8_t c = static_cast<uint8_t>(src[i]);
-        if (c < 0x80) {
-            // ASCII compatible (0x00-0x7F)
-            result.push_back(static_cast<char>(c));
-        } else {
-            // EBU Latin extended characters (0x80-0xFF)
-            // Based on ETSI TS 101 756 Annex C Table C.1
-            switch (c) {
-                // Row 8 (0x80-0x8F)
-                case 0x80: result += " "; break;    // no-break space
-                case 0x81: result += "¡"; break;
-                case 0x82: result += "¢"; break;
-                case 0x83: result += "£"; break;
-                case 0x84: result += "$"; break;
-                case 0x85: result += "¥"; break;
-                case 0x86: result += "#"; break;
-                case 0x87: result += "§"; break;
-                case 0x88: result += "¤"; break;
-                case 0x89: result += "'"; break;    // left single quote
-                case 0x8A: result += "\""; break;   // left double quote
-                case 0x8B: result += "«"; break;
-                case 0x8C: result += "←"; break;
-                case 0x8D: result += "ß"; break;    // sharp s (used in German)
-                case 0x8E: result += "→"; break;
-                case 0x8F: result += "↓"; break;
-
-                // Row 9 (0x90-0x9F)
-                // Note: DAB EBU Latin puts umlauts in this range
-                case 0x90: result += "°"; break;
-                case 0x91: result += "ä"; break;    // German a umlaut (lowercase)
-                case 0x92: result += "²"; break;
-                case 0x93: result += "³"; break;
-                case 0x94: result += "×"; break;
-                case 0x95: result += "µ"; break;
-                case 0x96: result += "¶"; break;
-                case 0x97: result += "ö"; break;    // German o umlaut
-                case 0x98: result += "÷"; break;
-                case 0x99: result += "ü"; break;    // German u umlaut
-                case 0x9A: result += "'"; break;    // right single quote
-                case 0x9B: result += "»"; break;
-                case 0x9C: result += "¼"; break;
-                case 0x9D: result += "½"; break;
-                case 0x9E: result += "¾"; break;
-                case 0x9F: result += "¿"; break;
-
-                // Row A (0xA0-0xAF) - diacritical marks (combining)
-                case 0xA0: result += " "; break;    // space
-                case 0xA1: result += "`"; break;    // grave
-                case 0xA2: result += "´"; break;    // acute
-                case 0xA3: result += "^"; break;    // circumflex
-                case 0xA4: result += "~"; break;    // tilde
-                case 0xA5: result += "¯"; break;    // macron
-                case 0xA6: result += "˘"; break;    // breve
-                case 0xA7: result += "˙"; break;    // dot above
-                case 0xA8: result += "¨"; break;    // diaeresis
-                case 0xA9: result += "."; break;
-                case 0xAA: result += "˚"; break;    // ring above
-                case 0xAB: result += "¸"; break;    // cedilla
-                case 0xAC: result += "_"; break;    // underscore
-                case 0xAD: result += "˝"; break;    // double acute
-                case 0xAE: result += "˛"; break;    // ogonek
-                case 0xAF: result += "ˇ"; break;    // caron
-
-                // Row B (0xB0-0xBF) - line drawing characters
-                case 0xB0: result += "─"; break;
-                case 0xB1: result += " "; break;
-                case 0xB2: result += " "; break;
-                case 0xB3: result += " "; break;
-                case 0xB4: result += " "; break;
-                case 0xB5: result += " "; break;
-                case 0xB6: result += " "; break;
-                case 0xB7: result += " "; break;
-                case 0xB8: result += " "; break;
-                case 0xB9: result += " "; break;
-                case 0xBA: result += " "; break;
-                case 0xBB: result += "°"; break;    // degree sign (also at 0x90)
-                case 0xBC: result += " "; break;
-                case 0xBD: result += " "; break;
-                case 0xBE: result += " "; break;
-                case 0xBF: result += " "; break;
-
-                // Row C (0xC0-0xCF) - capital letters with diacritics
-                case 0xC0: result += " "; break;
-                case 0xC1: result += "À"; break;
-                case 0xC2: result += "Á"; break;
-                case 0xC3: result += "Â"; break;
-                case 0xC4: result += "Ã"; break;
-                case 0xC5: result += "Ä"; break;    // German A umlaut
-                case 0xC6: result += "Ă"; break;
-                case 0xC7: result += "Ç"; break;
-                case 0xC8: result += "È"; break;
-                case 0xC9: result += "É"; break;
-                case 0xCA: result += "Ê"; break;
-                case 0xCB: result += "Ë"; break;
-                case 0xCC: result += "Ì"; break;
-                case 0xCD: result += "Í"; break;
-                case 0xCE: result += "Î"; break;
-                case 0xCF: result += "Ï"; break;
-
-                // Row D (0xD0-0xDF) - more capital letters
-                case 0xD0: result += "Ð"; break;
-                case 0xD1: result += "Ñ"; break;
-                case 0xD2: result += "Ò"; break;
-                case 0xD3: result += "Ó"; break;
-                case 0xD4: result += "Ô"; break;
-                case 0xD5: result += "Õ"; break;
-                case 0xD6: result += "Ö"; break;    // German O umlaut
-                case 0xD7: result += "Œ"; break;
-                case 0xD8: result += "Ø"; break;
-                case 0xD9: result += "Ü"; break;    // German U umlaut (NOT Ù!)
-                case 0xDA: result += "Ù"; break;
-                case 0xDB: result += "Ú"; break;
-                case 0xDC: result += "Û"; break;
-                case 0xDD: result += "Ý"; break;
-                case 0xDE: result += "Þ"; break;
-                case 0xDF: result += "ß"; break;
-
-                // Row E (0xE0-0xEF) - small letters with diacritics
-                case 0xE0: result += "à"; break;
-                case 0xE1: result += "á"; break;
-                case 0xE2: result += "â"; break;
-                case 0xE3: result += "ã"; break;
-                case 0xE4: result += "ä"; break;    // German a umlaut
-                case 0xE5: result += "å"; break;
-                case 0xE6: result += "æ"; break;
-                case 0xE7: result += "ç"; break;
-                case 0xE8: result += "è"; break;
-                case 0xE9: result += "é"; break;
-                case 0xEA: result += "ê"; break;
-                case 0xEB: result += "ë"; break;
-                case 0xEC: result += "ì"; break;
-                case 0xED: result += "í"; break;
-                case 0xEE: result += "î"; break;
-                case 0xEF: result += "ï"; break;
-
-                // Row F (0xF0-0xFF) - more small letters
-                case 0xF0: result += "ð"; break;
-                case 0xF1: result += "ñ"; break;
-                case 0xF2: result += "ò"; break;
-                case 0xF3: result += "ó"; break;
-                case 0xF4: result += "ô"; break;
-                case 0xF5: result += "õ"; break;
-                case 0xF6: result += "ö"; break;
-                case 0xF7: result += "œ"; break;
-                case 0xF8: result += "ø"; break;
-                case 0xF9: result += "ù"; break;
-                case 0xFA: result += "ú"; break;
-                case 0xFB: result += "û"; break;
-                case 0xFC: result += "ü"; break;
-                case 0xFD: result += "ý"; break;
-                case 0xFE: result += "þ"; break;
-                case 0xFF: result += "ÿ"; break;
-
-                default:
-                    // Unknown character - use space
-                    result += " ";
-                    break;
-            }
-        }
+// the application type that continues one (start of a data group -> its continuation)
+uint8_t continuation(uint8_t app_type) {
+    switch (app_type) {
+    case 2: return 3;    // dynamic label
+    case 12: return 13;  // MOT
+    case 14: return 15;  // MOT, conditional access
+    default: return app_type;
     }
-    return result;
 }
 
-PadDecoder::PadDecoder() {
-    // PAD decoder uses manual DSE parsing (like dablin's CheckForPAD)
-    // No FDK-AAC initialization needed for PAD extraction
-    reset();
+// CRC of an X-PAD data group: CCITT (x^16 + x^12 + x^5 + 1), preset to ones, sent inverted
+uint16_t crc16(const uint8_t* data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= static_cast<uint16_t>(data[i] << 8);
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
+    }
+    return static_cast<uint16_t>(~crc);
 }
 
-void PadDecoder::configure(bool dac_rate, bool sbr_flag, bool ps_flag, bool aac_channel_mode) {
-    // No longer needed - PAD uses manual DSE parsing, not FDK-AAC
-    // Kept for API compatibility
-    (void)dac_rate;
-    (void)sbr_flag;
-    (void)ps_flag;
-    (void)aac_channel_mode;
-}
+} // namespace
 
-PadDecoder::~PadDecoder() {
-    // Nothing to clean up - no FDK-AAC resources used for PAD
-}
+PadDecoder::PadDecoder() = default;
+PadDecoder::~PadDecoder() = default;
 
 void PadDecoder::reset() {
-    xpad_present_ = false;
-    xpad_ci_ = 0;
-    xpad_app_type_ = 0;
-    xpad_len_ = 0;
-
-    dg_buffer_.clear();
-    dg_in_progress_ = false;
-    dg_type_ = 0;
-
-    dlplus_buffer_.clear();
-    dlplus_link_pending_ = false;
-
-    std::fill(dls_buffer_.begin(), dls_buffer_.end(), 0);
-    dls_len_ = 0;
-    dls_charset_ = 0;
-    dls_first_received_ = false;
-
-    current_dls_.clear();
-    current_tags_.clear();
-
-    pad_count_ = 0;
-    dls_count_ = 0;
-    dlplus_count_ = 0;
+    last_type_ = 0;
+    last_len_ = 0;
+    dg_.clear();
+    dg_need_ = 0;
+    dg_active_ = false;
+    seg_toggle_ = -1;
+    for (auto& s : seg_) s.clear();
+    seg_have_ = 0;
+    seg_last_ = -1;
+    label_toggle_ = -1;
+    label_text_.clear();
+    label_done_ = false;
+    tags_.clear();
+    tags_link_ = -1;
+    tags_done_ = false;
+    pad_count_ = dls_count_ = dlplus_count_ = crc_errors_ = 0;
 }
 
-void PadDecoder::processPad(const uint8_t* au_data, size_t au_len) {
-    // Manually parse DSE from AU data like dablin does
-    // The AU contains: [DSE header][PAD data (X-PAD reversed)][F-PAD (2 bytes)]
-    //
-    // DSE structure (ETSI TS 102 563):
-    //   Byte 0: element_id (3 bits) | element_instance_tag (4 bits) | data_byte_align_flag (1 bit)
-    //   Byte 1: count (length of data)
-    //   If count == 255: Byte 2 = esc_count, total_len = 255 + esc_count
-    //   Following bytes: PAD data
+void PadDecoder::discontinuity() {
+    // a data group and an X-PAD continuation do not go on over lost frames;
+    // segments already checked stay (a label is sent again and again)
+    dg_.clear();
+    dg_need_ = 0;
+    dg_active_ = false;
+    last_type_ = 0;
+    last_len_ = 0;
+}
 
-    if (au_len < 3) return;
+void PadDecoder::processAu(const uint8_t* au, size_t au_len) {
+    // TS 102 563: the PAD is in a data stream element (ID_DSE = 4) at the start of the AU:
+    // element_id (3 bits), element_instance_tag (4), data_byte_align_flag (1), count (8)
+    // [esc_count (8) when count is 255], the data bytes
+    if (au_len < 2 || (au[0] >> 5) != 4) return;
+    size_t start = 2;
+    size_t count = au[1];
+    if (count == 255) {
+        if (au_len < 3) return;
+        count += au[2];
+        start = 3;
+    }
+    if (count < 2 || start + count > au_len) return;
+    process(au + start, count - 2, au + start + count - 2);
+}
+
+void PadDecoder::process(const uint8_t* xpad, size_t room, const uint8_t* fpad) {
     pad_count_++;
-
-    // Check for DSE (Data Stream Element) at start of AU
-    // element_id = 4 (bits 7-5)
-    if ((au_data[0] >> 5) != 4) {
-        // No DSE found - some AUs may not have PAD
-        if (pad_count_ <= 20) {
-            LOG_TRACE(PAD, "No DSE: first byte=0x" << std::hex << (int)au_data[0]
-                      << " (element_id=" << std::dec << (au_data[0] >> 5) << ")");
-        }
-        return;
-    }
-
-    // Parse DSE length
-    size_t pad_start = 2;
-    size_t pad_len = au_data[1];
-    if (pad_len == 255) {
-        if (au_len < 4) return;
-        pad_len += au_data[2];
-        pad_start = 3;
-    }
-
-    // F-PAD is always 2 bytes at the end of PAD data
-    constexpr size_t FPAD_LEN = 2;
-    if (pad_len < FPAD_LEN || au_len < pad_start + pad_len) {
-        if (pad_count_ <= 10) {
-            LOG_TRACE(PAD, "Invalid DSE length: pad_len=" << pad_len
-                      << " au_len=" << au_len << " pad_start=" << pad_start);
-        }
-        return;
-    }
-
-    // Extract PAD data and F-PAD
-    const uint8_t* pad_data = au_data + pad_start;
-    size_t xpad_len = pad_len - FPAD_LEN;
-    const uint8_t* fpad = pad_data + xpad_len;
-
-    if (pad_count_ <= 30) {
-        LOG_TRACE(PAD, "DSE found: pad_len=" << pad_len << " xpad_len=" << xpad_len
-                  << " fpad=" << std::hex << (int)fpad[0] << (int)fpad[1] << std::dec);
-    }
-
-    // Parse F-PAD (dablin's interpretation)
-    // fpad[0] bits 7-6: F-PAD type
-    // fpad[0] bits 5-4: X-PAD Indicator
-    // fpad[1] bit 1: CI flag
-    uint8_t fpad_type = (fpad[0] >> 6) & 0x03;
+    // F-PAD type 00: byte L-1 has the X-PAD indicator; byte L the contents indicator flag
+    if ((fpad[0] >> 6) != 0) return;
     uint8_t xpad_ind = (fpad[0] >> 4) & 0x03;
     bool ci_flag = (fpad[1] & 0x02) != 0;
-
-    (void)fpad_type;
-
-    if (pad_count_ <= 50) {
-        LOG_TRACE(PAD, "F-PAD: " << std::hex << (int)fpad[0] << (int)fpad[1] << std::dec
-                  << " xpad_ind=" << (int)xpad_ind << " ci_flag=" << ci_flag);
-    }
-
-    if (xpad_ind == 0) {
-        return;  // No X-PAD
-    }
-
-    // X-PAD is stored in REVERSE order in the PAD data (before F-PAD)
-    // For Short X-PAD (xpad_ind=1): always 4 bytes
-    // For Variable X-PAD (xpad_ind=2): length from DSE minus F-PAD
-    size_t actual_xpad_len = xpad_len;  // xpad_len from DSE parsing
-    if (xpad_ind == 1) {
-        actual_xpad_len = 4;  // Short X-PAD is always 4 bytes
-    }
-
-    if (actual_xpad_len == 0 || actual_xpad_len > xpad_len) return;
-
-    // Reverse X-PAD bytes (dablin: "undo reversed byte order")
-    std::vector<uint8_t> xpad(actual_xpad_len);
-    for (size_t i = 0; i < actual_xpad_len; i++) {
-        xpad[i] = pad_data[actual_xpad_len - 1 - i];
-    }
-
-    // After reversal: CI(s) at start, data follows
+    // byte k of the X-PAD (its bytes are in reverse order at the end of the room)
+    auto xb = [&](size_t k) { return xpad[room - 1 - k]; };
+    uint8_t buf[48];
 
     if (xpad_ind == 1) {
-        // Short X-PAD (4 bytes): After reversal: [CI][D2][D1][D0]
-        // CI is at the START, data follows
-        if (actual_xpad_len < 4) return;
-
-        uint8_t ci = xpad[0];  // CI at start after reversal
-        uint8_t app_type = ci & 0x1F;
-
-        if (pad_count_ <= 50) {
-            LOG_TRACE(PAD, "Short X-PAD: CI=0x" << std::hex << (int)ci << std::dec
-                      << " app_type=" << (int)app_type);
+        // short X-PAD: 4 bytes, with a contents indicator the first of them
+        if (room < 4) return;
+        size_t at = 0;
+        uint8_t app = continuation(last_type_);
+        if (ci_flag) {
+            app = xb(0) & 0x1F;
+            at = 1;
         }
-
-        xpad_app_type_ = app_type;
-        if (app_type != 0) {
-            processXPad(xpad.data() + 1, 3, app_type);  // Data starts after CI
-        }
+        size_t n = 4 - at;
+        for (size_t k = 0; k < n; k++) buf[k] = xb(at + k);
+        last_type_ = app;
+        last_len_ = n;
+        if (app) subfield(app, buf, n);
         return;
     }
+    if (xpad_ind != 2) return;  // none (0) or reserved (3)
 
-    if (xpad_ind == 2 && ci_flag) {
-        // Variable X-PAD with CI(s) at start after reversal
-        // Can have multiple CIs, each describing a data subfield
-        if (actual_xpad_len < 2) return;
-
-        // Parse CI entries (up to 4) - dablin approach
-        size_t ci_count = 0;
-        std::vector<uint8_t> cis;
-        for (size_t i = 0; i < 4 && i < actual_xpad_len; i++) {
-            uint8_t ci = xpad[i];
-            ci_count++;
-            if ((ci & 0x1F) == 0) break;  // End marker
-            cis.push_back(ci);
+    // variable size X-PAD: with a contents indicator list (up to 4, an end
+    // marker of type 0 after fewer), else one subfield continuing the last one
+    struct Sub { uint8_t app; size_t len; };
+    Sub subs[4];
+    size_t nsubs = 0, at = 0, total = 0;
+    if (ci_flag) {
+        while (nsubs < 4 && at < room) {
+            uint8_t ci = xb(at++);
+            uint8_t app = ci & 0x1F;
+            if (!app) break;
+            subs[nsubs++] = {app, XPAD_SUBFIELD_LEN[ci >> 5]};
+            total += XPAD_SUBFIELD_LEN[ci >> 5];
         }
-
-        // Data starts after CIs
-        size_t data_offset = ci_count;
-        const uint8_t* data_ptr = xpad.data() + data_offset;
-        size_t data_remaining = actual_xpad_len - data_offset;
-
-        // Process each CI's data subfield
-        for (auto ci : cis) {
-            uint8_t len_idx = (ci >> 5) & 0x07;
-            uint8_t app_type = ci & 0x1F;
-            size_t subfield_len = xpad_len_table[len_idx];
-
-            if (subfield_len > data_remaining) {
-                subfield_len = data_remaining;
-            }
-
-            if (pad_count_ <= 50) {
-                LOG_TRACE(PAD, "Variable X-PAD: CI=0x" << std::hex << (int)ci << std::dec
-                          << " len_idx=" << (int)len_idx << " len=" << subfield_len
-                          << " app_type=" << (int)app_type);
-            }
-
-            xpad_app_type_ = app_type;
-            if (app_type != 0 && subfield_len > 0) {
-                processXPad(data_ptr, subfield_len, app_type);
-            }
-
-            data_ptr += subfield_len;
-            if (subfield_len <= data_remaining) {
-                data_remaining -= subfield_len;
-            } else {
-                break;
-            }
-        }
+    } else if (last_type_) {
+        subs[nsubs++] = {continuation(last_type_), last_len_};
+        total = last_len_;
+    }
+    if (!nsubs || at + total > room) {
+        discontinuity();  // does not fit: the X-PAD of this frame is not what it says
         return;
     }
-
-    if (xpad_ind == 2 && !ci_flag) {
-        // Variable X-PAD without CI - use previous app_type
-        if (xpad_app_type_ != 0 && actual_xpad_len > 0) {
-            if (pad_count_ <= 50) {            }
-            processXPad(xpad.data(), actual_xpad_len, xpad_app_type_);
-        }
+    for (size_t i = 0; i < nsubs; i++) {
+        for (size_t k = 0; k < subs[i].len; k++) buf[k] = xb(at + k);
+        subfield(subs[i].app, buf, subs[i].len);
+        at += subs[i].len;
     }
+    last_type_ = subs[nsubs - 1].app;
+    last_len_ = subs[nsubs - 1].len;
 }
 
-void PadDecoder::processFPad(uint8_t fpad_type, uint8_t ci_flag) {
-    // F-PAD types (not commonly used for DLS):
-    // Type 0: No audio-related data (most common)
-    // Type 1: Audio-related data
-    // Type 2: RFU
-    // Type 3: RFU
-    (void)fpad_type;
-    (void)ci_flag;
-}
-
-void PadDecoder::processXPad(const uint8_t* xpad, size_t len, uint8_t app_type) {
-    // X-PAD Application Types:
-    // 0: Not used
-    // 1: Data Group Length Indicator
-    // 2: Data Group start
-    // 3: Data Group continuation
-    // 12: MOT (for SlideShow)
-    // 13: MOT continuation
-
-    if (app_type == 1) {
-        // Data Group Length Indicator (DGLI)
-        // Tells us the expected total length of the Data Group
-        if (len >= 4) {
-            // DGLI format: 4 bytes giving the length
-            // Bits 0-1: RFU, Bits 2-13: Length (12 bits)
-            size_t dg_len = ((xpad[0] & 0x3F) << 6) | ((xpad[1] >> 2) & 0x3F);
-            xpad_len_ = dg_len;        }
-        return;
-    }
-
-    if (app_type == 2) {
-        // Data Group start - first, process any pending Data Group
-        if (dg_in_progress_ && dg_buffer_.size() >= 3) {            processDataGroup(dg_buffer_.data(), dg_buffer_.size());
-        }
-
-        // Reset and start collecting new Data Group
-        dg_buffer_.clear();
-        dg_in_progress_ = true;
-        xpad_len_ = 0;
-    }
-
-    if (app_type == 2 || app_type == 3) {
-        // Data Group segment (start or continuation)        if (!dg_in_progress_) return;
-        if (len == 0) return;
-
-        dg_buffer_.insert(dg_buffer_.end(), xpad, xpad + len);
-
-        // If we have expected length from DGLI and have reached it, process now
-        if (xpad_len_ > 0 && dg_buffer_.size() >= xpad_len_) {            processDataGroup(dg_buffer_.data(), dg_buffer_.size());
-            dg_buffer_.clear();
-            dg_in_progress_ = false;
-            xpad_len_ = 0;
-        }
-
-        return;
-    }
-
-    // Other application types (MOT, etc.) - not implemented yet
-}
-
-void PadDecoder::processDataGroup(const uint8_t* data, size_t len) {
-    // DLS Data Group format (ETSI TS 102 980, simplified for PAD):
-    // This matches dablin's DynamicLabelDecoder approach
-    //
-    // Byte 0: Prefix
-    //   Bit 7: Toggle flag (changes when content updates)
-    //   Bit 6: First segment flag
-    //   Bit 5: Last segment flag
-    //   Bit 4: Command flag (1=DL Plus command, 0=DL segment)
-    //   Bits 3-0: If command=0: segment number (0-14) or charset (if first)
-    //             If command=1: command type
-    // Byte 1: (for segments) Additional info
-    // Following bytes: Character data
-
-    if (len < 2) return;
-
-    uint8_t prefix = data[0];
-    bool toggle = (prefix & 0x80) != 0;
-    bool command = (prefix & 0x10) != 0;
-    bool first = (prefix & 0x40) != 0;
-    bool last = (prefix & 0x20) != 0;
-
-    if (command) {
-        // DL Plus command
-        // Data Group structure for DL Plus (like dablin):
-        //   Byte 0 (data[0]): Prefix (toggle|first|last|cmd=1|cmd_type)
-        //   Byte 1 (data[1]): Second prefix byte (contains field_len in bits 3-0)
-        //   Byte 2+ (data[2]): DL Plus command data (header + tags)
-        //   Last 2 bytes: CRC-16
-        uint8_t cmd_type = prefix & 0x0F;
-        if (cmd_type == 2) {
-            // DL Plus tags command
-            // DL Plus data starts at byte 2 (after 2-byte Data Group prefix)
-            if (len >= 4) {  // Need at least 2 prefix + 1 header + 1 tag byte
-                processDLPlus(data + 2, len - 2, toggle);
-            }
-        }
-        // cmd_type=0 is legacy "DL Plus command" with different format
-        // cmd_type=1 is Item Toggle (indicates new item started) - no tags
+void PadDecoder::subfield(uint8_t app_type, const uint8_t* data, size_t len) {
+    if (app_type == APP_DL_START) {
+        dg_.assign(data, data + len);
+        dg_need_ = 0;
+        dg_active_ = true;
+    } else if (app_type == APP_DL_CONT && dg_active_) {
+        dg_.insert(dg_.end(), data, data + len);
     } else {
-        // DL segment
-        // Calculate field length from lower nibble + 1
-        size_t field_len = (prefix & 0x0F) + 1;
-        if (len < 2 + field_len) {
-            // Not enough data, might need to wait for CRC verification
-            field_len = len - 2;
+        return;  // another application (MOT, ...): not read here
+    }
+
+    // the length of a dynamic label data group follows from its prefix (clause 7.4.5.2):
+    // a segment or DL Plus command has a field of (low nibble + 1) bytes, "remove label" none;
+    // 2 bytes prefix, the field, 2 bytes CRC
+    if (!dg_need_ && dg_.size() >= 2) {
+        uint8_t p0 = dg_[0];
+        if (!(p0 & 0x10)) {
+            dg_need_ = 2 + (p0 & 0x0F) + 1 + 2;
+        } else if ((p0 & 0x0F) == 1) {
+            dg_need_ = 4;
+        } else if ((p0 & 0x0F) == 2) {
+            dg_need_ = 2 + (dg_[1] & 0x0F) + 1 + 2;
+        } else {
+            dg_active_ = false;  // another command
+            return;
         }
-
-        // Skip 2-byte prefix, extract character data
-        if (len >= 2) {
-            processDLSSegmentNew(data, len, first, last, field_len, toggle);
-        }
     }
-}
-
-void PadDecoder::processDLSSegmentNew(const uint8_t* data, size_t len, bool first, bool last, size_t field_len, bool toggle) {
-    // DLS segment structure (dablin format):
-    // Byte 0: Prefix (toggle|first|last|cmd|field_len_minus_1)
-    // Byte 1: Second prefix byte (rfu/charset info)
-    // Bytes 2+: Character data (field_len bytes)
-    // Final 2 bytes: CRC-16 (if present)
-
-    if (len < 2) return;
-
-    // Extract character data starting at byte 2
-    const uint8_t* chars = data + 2;
-    size_t char_len = field_len;
-
-    // Ensure we don't read past the data (leave room for optional CRC)
-    if (char_len > len - 2) {
-        char_len = len - 2;
-    }
-
-    // For first segment, byte 1 contains charset info
-    if (first) {
-        dls_charset_ = data[1] & 0x0F;
-        dls_len_ = 0;
-        dls_first_received_ = true;
-        dls_toggle_ = toggle;  // Track toggle for this DLS
-    }
-
-    if (!dls_first_received_) {
+    if (!dg_need_ || dg_.size() < dg_need_) return;
+    dg_active_ = false;  // done; what follows in the subfield is padding
+    uint16_t crc = static_cast<uint16_t>(dg_[dg_need_ - 2] << 8 | dg_[dg_need_ - 1]);
+    if (crc16(dg_.data(), dg_need_ - 2) != crc) {
+        crc_errors_++;
         return;
     }
-
-    // Append character data
-    size_t copy_len = std::min(char_len, static_cast<size_t>(128) - dls_len_);
-    if (copy_len > 0) {
-        std::copy(chars, chars + copy_len, dls_buffer_.data() + dls_len_);
-        dls_len_ += copy_len;
-    }
-
-    if (last) {
-        // Complete DLS received
-        dls_buffer_[dls_len_] = '\0';
-
-        // Convert charset if needed
-        if (dls_charset_ == 0) {
-            // Convert EBU Latin to UTF-8
-            current_dls_ = ebuLatinToUtf8(dls_buffer_.data(), dls_len_);
-        } else {
-            current_dls_ = std::string(dls_buffer_.data(), dls_len_);
-        }
-
-        current_dls_toggle_ = dls_toggle_;  // Store toggle of completed DLS
-
-        // Trim trailing spaces/nulls
-        while (!current_dls_.empty() &&
-               (current_dls_.back() == ' ' || current_dls_.back() == '\0')) {
-            current_dls_.pop_back();
-        }
-
-        // Clear tags when DLS changes (toggle changes)
-        current_tags_.clear();
-
-        dls_count_++;
-        if (dls_callback_ && !current_dls_.empty()) {
-            dls_callback_(current_dls_);
-        }
-
-        // Note: Don't call dlplus_callback here - wait for matching DL Plus tags
-
-        dls_first_received_ = false;
-    }
+    dataGroup(dg_.data(), dg_need_);
 }
 
-void PadDecoder::processDLSSegment(const uint8_t* data, size_t len, bool first, bool last) {
-    if (len < 1) return;
-
-    uint8_t prefix = data[0];
-    data++;
-    len--;
-
-    if (first) {
-        // First segment contains charset in bits 3-0 of prefix
-        dls_charset_ = prefix & 0x0F;
-        dls_len_ = 0;
-        dls_first_received_ = true;
-    }
-
-    if (!dls_first_received_) {
-        // Haven't seen first segment yet, ignore
-        return;
-    }
-
-    // Copy text data
-    size_t copy_len = std::min(len, static_cast<size_t>(128) - dls_len_);
-    if (copy_len > 0) {
-        std::copy(data, data + copy_len, dls_buffer_.data() + dls_len_);
-        dls_len_ += copy_len;
-    }
-
-    if (last) {
-        // Complete DLS received
-        dls_buffer_[dls_len_] = '\0';
-
-        // Convert charset if needed
-        // Charset 0 = EBU Latin (similar to ISO 8859-15)
-        // Charset 15 = UTF-8
-        if (dls_charset_ == 0) {
-            // Convert EBU Latin to UTF-8
-            current_dls_ = ebuLatinToUtf8(dls_buffer_.data(), dls_len_);
-        } else if (dls_charset_ == 15) {
-            // Already UTF-8
-            current_dls_ = std::string(dls_buffer_.data(), dls_len_);
-        } else {
-            // Unknown charset - use as-is
-            current_dls_ = std::string(dls_buffer_.data(), dls_len_);
-        }
-
-        // Trim trailing spaces/nulls
-        while (!current_dls_.empty() &&
-               (current_dls_.back() == ' ' || current_dls_.back() == '\0')) {
-            current_dls_.pop_back();
-        }
-
-        dls_count_++;
-        // Notify callback
-        if (dls_callback_ && !current_dls_.empty()) {
-            dls_callback_(current_dls_);
-        }
-
-        // Also notify DL Plus callback (text changed)
-        if (dlplus_callback_ && !current_dls_.empty()) {
-            dlplus_callback_(current_dls_, current_tags_);
-        }
-
-        // Reset for next DLS
-        dls_first_received_ = false;
-    }
-}
-
-void PadDecoder::processDLPlus(const uint8_t* data, size_t len, bool toggle) {
-    // DL Plus structure (ETSI TS 102 980):
-    // Byte 0: Header
-    //   Bit 7: Link bit (1 = more segments follow)
-    //   Bits 6-4: RFU or running state (for Item Running)
-    //   Bits 3-0: Number of tags - 1 (nt, actual count = nt + 1)
-    // Following bytes: Tags (3 bytes each)
-    //   Byte 0 bits 6-0: Content type (7 bits)
-    //   Byte 1 bits 6-0: Start marker (7 bits)
-    //   Byte 2 bits 6-0: Length marker (7 bits, actual length = marker + 1)
-    // Last 2 bytes: CRC-16
-
-    // Only process if toggle matches current DLS
-    if (toggle != current_dls_toggle_) {        dlplus_buffer_.clear();
-        dlplus_link_pending_ = false;
-        return;
-    }
-
-    if (len < 3) return;
-
-    uint8_t header = data[0];
-    bool link_bit = (header & 0x80) != 0;
-    int nt = header & 0x0F;
-    int num_tags = nt + 1;
-
-    // Handle linked segments: accumulate data until link bit is 0
-    if (link_bit) {
-        // This segment links to next - accumulate (skip header, include tag bytes)
-        // CRC is only at the end of the final segment
-        if (dlplus_buffer_.empty()) {
-            // First segment - store header info and toggle
-            dlplus_buffer_.push_back(header);
-            dlplus_pending_toggle_ = toggle;
-        }
-        // Append tag data (skip header byte, keep rest except possible partial CRC)
-        for (size_t i = 1; i < len; i++) {
-            dlplus_buffer_.push_back(data[i]);
-        }
-        dlplus_link_pending_ = true;        return;
-    }
-
-    // Final segment (link bit = 0)
-    std::vector<uint8_t> complete_data;
-    if (dlplus_link_pending_ && !dlplus_buffer_.empty()) {
-        // Check that toggle matches the pending linked segment
-        if (toggle != dlplus_pending_toggle_) {            dlplus_buffer_.clear();
-            dlplus_link_pending_ = false;
-            // Process this segment as standalone
-            complete_data.assign(data, data + len);
-        } else {
-            // We have accumulated data from previous segments with matching toggle
-            complete_data = std::move(dlplus_buffer_);
-            // Append this final segment (skip header if we already have one)
-            for (size_t i = 1; i < len; i++) {
-                complete_data.push_back(data[i]);
-            }
-            dlplus_buffer_.clear();
-            dlplus_link_pending_ = false;
-            // Update header and num_tags from accumulated data
-            header = complete_data[0];
-            nt = header & 0x0F;
-            num_tags = nt + 1;
+void PadDecoder::dataGroup(const uint8_t* dg, size_t len) {
+    uint8_t p0 = dg[0];
+    if (!(p0 & 0x10)) {
+        segment(dg, len - 4);
+    } else if ((p0 & 0x0F) == 1) {
+        // remove label
+        seg_toggle_ = -1;
+        seg_have_ = 0;
+        seg_last_ = -1;
+        label_done_ = false;
+        label_toggle_ = -1;
+        if (!label_text_.empty()) {
+            label_text_.clear();
+            if (dls_callback_) dls_callback_(label_text_);
         }
     } else {
-        // Single segment, no linking
-        complete_data.assign(data, data + len);
-    }
-
-    // Remove CRC-16 (2 bytes) from the end
-    if (complete_data.size() < 5) return;  // Need header + at least 1 tag + CRC
-    size_t data_len = complete_data.size() - 2;
-
-    // Tags start at byte 1 (after header)
-    size_t tag_offset = 1;
-    size_t available_tag_bytes = data_len - 1;
-    int max_tags = static_cast<int>(available_tag_bytes / 3);
-    num_tags = std::min(num_tags, max_tags);
-
-    if (num_tags <= 0 || num_tags > 4) {
-        return;
-    }
-
-    // Parse tags
-    current_tags_.clear();
-    const uint8_t* tag_ptr = complete_data.data() + tag_offset;
-
-    for (int i = 0; i < num_tags; i++) {
-        if (tag_offset + (i + 1) * 3 > data_len) break;
-
-        DLPlusTag tag;
-        tag.content_type = static_cast<DLPlusContentType>(tag_ptr[0] & 0x7F);
-        tag.start_marker = tag_ptr[1] & 0x7F;
-        tag.length_marker = tag_ptr[2] & 0x7F;
-
-        // Validate tag - skip dummy or clearly invalid tags
-        if (tag.content_type != DLPlusContentType::DUMMY &&
-            tag.start_marker < 128 && tag.length_marker < 128) {            if (!current_dls_.empty() && tag.start_marker < current_dls_.size()) {
-                std::string extracted = tag.extract(current_dls_);            }
-            // Only add tags for TITLE and ARTIST (the ones we care about for EIT)
-            if (tag.content_type == DLPlusContentType::ITEM_TITLE ||
-                tag.content_type == DLPlusContentType::ITEM_ARTIST ||
-                tag.content_type == DLPlusContentType::ITEM_ALBUM ||
-                tag.content_type == DLPlusContentType::PROGRAMME_NOW ||
-                tag.content_type == DLPlusContentType::STATIONNAME_LONG) {
-                current_tags_.push_back(tag);
-            }
-        }
-
-        tag_ptr += 3;
-    }
-
-    if (!current_tags_.empty()) {
-        dlplus_count_++;
-
-        // Notify callback if we have DLS text
-        if (dlplus_callback_ && !current_dls_.empty()) {
-            dlplus_callback_(current_dls_, current_tags_);
-        }
+        dlPlus(dg, len - 4);
     }
 }
 
-bool PadDecoder::isValidDLS(const std::string& text) {
-    if (text.size() < 8) return false;
-
-    // Check for fill patterns (repeating characters)
-    bool all_same = true;
-    for (size_t i = 1; i < text.size() && all_same; i++) {
-        if (text[i] != text[0]) all_same = false;
+void PadDecoder::segment(const uint8_t* dg, size_t field_len) {
+    // prefix: toggle (b7), first (b6), last (b5), C = 0 (b4), field length - 1 (b3-0);
+    // second byte: the character set (b7-4) of the first segment, else its number (b6-4)
+    int toggle = dg[0] >> 7;
+    bool first = (dg[0] & 0x40) != 0;
+    bool last = (dg[0] & 0x20) != 0;
+    int num = first ? 0 : (dg[1] >> 4) & 0x07;
+    if (toggle != seg_toggle_) {
+        seg_toggle_ = toggle;
+        seg_have_ = 0;
+        seg_last_ = -1;
+        label_done_ = false;
     }
-    if (all_same) return false;
+    if (first) seg_charset_ = dg[1] >> 4;
+    std::vector<uint8_t> chars(dg + 2, dg + 2 + field_len);
+    if ((seg_have_ & (1u << num)) && seg_[num] != chars) label_done_ = false;  // reused toggle
+    seg_[num] = std::move(chars);
+    seg_have_ |= static_cast<uint8_t>(1u << num);
+    if (last) seg_last_ = num;
+    uint8_t all = static_cast<uint8_t>((1u << (seg_last_ + 1)) - 1);
+    if (!label_done_ && seg_last_ >= 0 && (seg_have_ & all) == all) labelComplete();
+}
 
-    // Check for alternating patterns like "iiiii" or "ZZZZZ"
-    int repeat_count = 1;
-    for (size_t i = 1; i < text.size(); i++) {
-        if (text[i] == text[i-1]) {
-            repeat_count++;
-            if (repeat_count > 4) return false;  // Too many repeats
-        } else {
-            repeat_count = 1;
+void PadDecoder::labelComplete() {
+    label_done_ = true;
+    std::vector<uint8_t> raw;
+    for (int i = 0; i <= seg_last_; i++) raw.insert(raw.end(), seg_[i].begin(), seg_[i].end());
+    std::string text;
+    if (!dabLabelToUtf8(raw.data(), raw.size(), seg_charset_, text)) {
+        if (!charset_warned_) {
+            LOG_WARN(PAD, "dynamic label in character set " << (int)seg_charset_ << ", not read");
+            charset_warned_ = true;
         }
+        return;
     }
-
-    // Filter out JPEG/binary patterns
-    if (text.find("JFIF") != std::string::npos) return false;
-    if (text.find("CREATOR") != std::string::npos) return false;
-    if (text.find("gd-jpeg") != std::string::npos) return false;
-    if (text.find("IJG") != std::string::npos) return false;
-
-    // Filter out common ASCII sequences (like from binary data)
-    if (text.find(")*456789") != std::string::npos) return false;
-    if (text.find("CDEFGHIJ") != std::string::npos) return false;
-    if (text.find("stuvwxyz") != std::string::npos) return false;
-
-    // Check for valid DLS patterns (has spaces, dashes, or alphanumeric mix)
-    int space_count = 0;
-    int letter_count = 0;
-    int digit_count = 0;
-    int special_count = 0;
-
-    for (char c : text) {
-        if (c == ' ') space_count++;
-        else if (std::isalpha(static_cast<unsigned char>(c))) letter_count++;
-        else if (std::isdigit(static_cast<unsigned char>(c))) digit_count++;
-        else special_count++;
+    while (!text.empty() && text.back() == ' ') text.pop_back();
+    dls_count_++;
+    if (label_toggle_ != seg_toggle_ || text != label_text_) {
+        label_toggle_ = seg_toggle_;
+        label_text_ = text;
+        if (tags_link_ != label_toggle_) {
+            tags_.clear();
+            tags_link_ = -1;
+        }
+        tags_done_ = false;
+        if (dls_callback_) dls_callback_(label_text_);
     }
+    emitTags();
+}
 
-    // Valid DLS typically has:
-    // - Some spaces (for "Artist - Title" format)
-    // - Mostly letters
-    // - Not too many special characters
-    if (space_count == 0 && text.size() > 20) return false;  // Long text without spaces is suspicious
-    if (letter_count < static_cast<int>(text.size()) / 3) return false;  // Too few letters
-    if (special_count > static_cast<int>(text.size()) / 3) return false;  // Too many special chars
+void PadDecoder::dlPlus(const uint8_t* dg, size_t field_len) {
+    // TS 102 980: second prefix byte: link bit (b7) = the toggle of the label the
+    // command is about; the field: CId (b7-4, 0 = DL Plus tags), CB = item toggle
+    // (b3), item running (b2), number of tags - 1 (b1-0), then 3 bytes per tag:
+    // content type, start marker, length marker (7 bits each)
+    int link = dg[1] >> 7;
+    const uint8_t* f = dg + 2;
+    if (field_len < 1 || (f[0] >> 4) != 0) return;
+    size_t nt = (f[0] & 0x03) + 1;
+    if (field_len < 1 + 3 * nt) return;
+    std::vector<DLPlusTag> tags;
+    for (size_t i = 0; i < nt; i++) {
+        DLPlusTag t;
+        t.content_type = static_cast<DLPlusContentType>(f[1 + 3 * i] & 0x7F);
+        t.start_marker = f[2 + 3 * i] & 0x7F;
+        t.length_marker = f[3 + 3 * i] & 0x7F;
+        if (t.content_type != DLPlusContentType::DUMMY) tags.push_back(t);
+    }
+    bool same = link == tags_link_ && tags.size() == tags_.size() &&
+                std::equal(tags.begin(), tags.end(), tags_.begin(), [](const DLPlusTag& a, const DLPlusTag& b) {
+                    return a.content_type == b.content_type && a.start_marker == b.start_marker &&
+                           a.length_marker == b.length_marker;
+                });
+    if (same) return;
+    tags_ = std::move(tags);
+    tags_link_ = link;
+    tags_done_ = false;
+    emitTags();
+}
 
-    return true;
+void PadDecoder::emitTags() {
+    // the tags go with the label they are linked to, once it is complete
+    if (tags_done_ || tags_link_ < 0 || tags_link_ != label_toggle_ || label_text_.empty()) return;
+    tags_done_ = true;
+    dlplus_count_++;
+    if (dlplus_callback_) dlplus_callback_(label_text_, tags_);
 }
 
 const char* dlPlusContentTypeToString(DLPlusContentType type) {

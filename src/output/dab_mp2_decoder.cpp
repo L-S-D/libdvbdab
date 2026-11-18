@@ -2,6 +2,7 @@
 // DAB audio uses raw MP2 frames without any superframe wrapper
 
 #include "dab_mp2_decoder.hpp"
+#include "pad_decoder.hpp"
 #include "../logging.h"
 #include <cstring>
 
@@ -63,14 +64,27 @@ static const int samples_per_frame[4][4] = {
 DabMp2Decoder::DabMp2Decoder(int bitrate)
     : bitrate_(bitrate)
     , frame_size_(bitrate * 3)  // bitrate * 24ms / 8 = bitrate * 3 bytes
+    , pad_(std::make_unique<PadDecoder>())
 {
     buffer_.reserve(frame_size_ * 2);  // Reserve space for buffering
+}
+
+DabMp2Decoder::~DabMp2Decoder() = default;
+
+void DabMp2Decoder::setDLSCallback(std::function<void(const std::string& text)> cb) {
+    pad_->setDLSCallback(std::move(cb));
+}
+
+void DabMp2Decoder::setDLPlusCallback(
+    std::function<void(const std::string& text, const std::vector<DLPlusTag>& tags)> cb) {
+    pad_->setDLPlusCallback(std::move(cb));
 }
 
 void DabMp2Decoder::reset() {
     synced_ = false;
     sync_offset_ = 0;
     buffer_.clear();
+    pad_->reset();
     frame_count_ = 0;
     mp2_frame_count_ = 0;
     sync_errors_ = 0;
@@ -80,6 +94,7 @@ void DabMp2Decoder::resync() {
     synced_ = false;
     sync_offset_ = 0;
     buffer_.clear();
+    pad_->discontinuity();
 }
 
 bool DabMp2Decoder::isSync(const uint8_t* data) {
@@ -193,6 +208,14 @@ int DabMp2Decoder::feedFrame(const uint8_t* data, size_t len) {
         // Emit frame
         if (callback_) {
             callback_(buffer_.data() + pos, frame_size);
+        }
+        // the PAD at the end of the frame (EN 300 401 clause 7.4): the F-PAD
+        // in the last 2 bytes, before them the ScF-CRC (MPEG-1 below 56 kbit/s
+        // per channel 2 bytes, else 4), before that the X-PAD
+        size_t scf_crc = (params_.version == 1 && params_.bitrate < (params_.channel_mode == 3 ? 56 : 112)) ? 2 : 4;
+        if (static_cast<size_t>(frame_size) > 4 + scf_crc + 2) {
+            const uint8_t* f = buffer_.data() + pos;
+            pad_->process(f + 4, frame_size - 4 - scf_crc - 2, f + frame_size - 2);
         }
         mp2_frame_count_++;
         frames_extracted++;

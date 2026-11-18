@@ -152,6 +152,7 @@ private:
 
     // PAD decoder for DLS/DL Plus extraction
     std::unique_ptr<PadDecoder> pad_decoder_;
+    int64_t pad_next_slot_ = -1;  // the AU slot the PAD decoder expects next
 
     // Statistics
     size_t frame_count_ = 0;

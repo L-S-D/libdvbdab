@@ -1,7 +1,9 @@
 #include "dab_stream_processor.hpp"
+#include "pad_decoder.hpp"
 #include "../logging.h"
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 namespace dvbdab {
 
@@ -154,13 +156,11 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
             });
 
             decoder->setDLSCallback([this, subchannel_id](const std::string& text) {
-                if (text.size() < 5) return;
-                if (!std::isupper(static_cast<unsigned char>(text[0]))) return;
-
-                auto it = subch_to_sid_.find(subchannel_id);
-                if (it != subch_to_sid_.end()) {
-                    muxer_.setNowPlaying(it->second, text);
-                }
+                onLabel(subchannel_id, text);
+            });
+            decoder->setDLPlusCallback([this, subchannel_id](const std::string& text,
+                                                             const std::vector<DLPlusTag>& tags) {
+                onDLPlus(subchannel_id, text, tags);
             });
 
             dabplus_decoders_[subchannel_id] = std::move(decoder);
@@ -203,11 +203,46 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
                 muxer_.feedAudioFrame(it->second, data, len, pts);
             });
 
+            decoder->setDLSCallback([this, subchannel_id](const std::string& text) {
+                onLabel(subchannel_id, text);
+            });
+            decoder->setDLPlusCallback([this, subchannel_id](const std::string& text,
+                                                             const std::vector<DLPlusTag>& tags) {
+                onDLPlus(subchannel_id, text, tags);
+            });
+
             mp2_decoders_[subchannel_id] = std::move(decoder);
         }
     }
 
     muxer_configured_ = true;
+}
+
+// the dynamic label of a service: as its now playing
+void DabStreamProcessor::onLabel(uint8_t subchannel_id, const std::string& text) {
+    auto it = subch_to_sid_.find(subchannel_id);
+    if (it == subch_to_sid_.end()) return;
+    auto& last = last_dls_[subchannel_id];
+    if (text != last) {
+        last = text;
+        LOG_DEBUG(DABPLUS, "dynamic label of service 0x" << std::hex << it->second << std::dec << ": \""
+                  << text << "\"");
+    }
+    muxer_.setNowPlaying(it->second, text);
+}
+
+void DabStreamProcessor::onDLPlus(uint8_t subchannel_id, const std::string& text,
+                                  const std::vector<DLPlusTag>& tags) {
+    auto it = subch_to_sid_.find(subchannel_id);
+    if (it == subch_to_sid_.end()) return;
+    std::ostringstream o;
+    for (const auto& t : tags)
+        o << " " << dlPlusContentTypeToString(t.content_type) << "=\"" << t.extract(text) << "\"";
+    auto& last = last_dlplus_[subchannel_id];
+    if (o.str() != last) {
+        last = o.str();
+        LOG_DEBUG(DABPLUS, "DL Plus of service 0x" << std::hex << it->second << std::dec << ":" << o.str());
+    }
 }
 
 void DabStreamProcessor::stopService(uint8_t subchannel_id) {

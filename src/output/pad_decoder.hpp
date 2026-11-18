@@ -1,9 +1,8 @@
 #pragma once
-// PAD (Programme Associated Data) decoder for DAB+
-// Extracts DLS (Dynamic Label Segment) text and DL Plus tags
-// References: ETSI EN 300 401, ETSI TS 102 980
-//
-// Uses FDK-AAC to properly extract DSE (ancillary data) from AAC AU
+// PAD (Programme Associated Data) of DAB and DAB+ audio: dynamic labels (DLS)
+// and their DL Plus tags. References: ETSI EN 300 401 (clause 7.4: PAD, X-PAD,
+// dynamic label data groups), ETSI TS 102 980 (DL Plus), ETSI TS 102 563 (the
+// PAD of DAB+ in the data stream element of an AU).
 
 #include <cstdint>
 #include <cstddef>
@@ -92,116 +91,93 @@ struct DLPlusTag {
     }
 };
 
-// Callback for complete DLS text
+// Callback for a complete dynamic label (UTF-8); an empty text: the label was removed
 using DLSCallback = std::function<void(const std::string& text)>;
 
-// Callback for DL Plus update (text + tags)
+// Callback for the DL Plus tags of the current label
 using DLPlusCallback = std::function<void(const std::string& text,
                                           const std::vector<DLPlusTag>& tags)>;
 
-// PAD decoder - processes F-PAD and X-PAD from DAB+ audio frames
-// Uses FDK-AAC to extract ancillary data (DSE) like dablin does
+// PAD decoder: the PAD of each audio frame in order. The X-PAD data groups of
+// dynamic labels (application types 2 and 3) are collected, checked by their
+// CRC and put together into labels: a label is complete when all its segments
+// of one toggle state came. Lost frames make an unfinished data group void
+// (discontinuity()).
 class PadDecoder {
 public:
     PadDecoder();
     ~PadDecoder();
 
-    // Reset decoder state
     void reset();
 
-    // Configure FDK-AAC decoder with DAB+ audio parameters
-    // Must be called before processPad() for correct DSE extraction
-    // These parameters come from the DAB+ superframe header (byte 2)
-    void configure(bool dac_rate, bool sbr_flag, bool ps_flag, bool aac_channel_mode);
-
-    // Set callbacks
     void setDLSCallback(DLSCallback cb) { dls_callback_ = std::move(cb); }
     void setDLPlusCallback(DLPlusCallback cb) { dlplus_callback_ = std::move(cb); }
 
-    // Process PAD data from DAB+ AU
-    // pad_data points to the PAD portion (last bytes of AU before CRC)
-    // pad_len is the length of PAD (typically AU length - audio data - 2 CRC bytes)
-    // In practice, we extract from the raw AU data
-    void processPad(const uint8_t* au_data, size_t au_len);
+    // The PAD of a frame: the F-PAD (2 bytes) and the room the X-PAD ends at:
+    // its bytes are the last ones of xpad_room bytes from xpad, in reverse
+    // order (DAB+: the data stream element before its F-PAD; DAB: the MPEG
+    // audio frame before its ScF-CRC). The contents indicators give the length.
+    void process(const uint8_t* xpad, size_t xpad_room, const uint8_t* fpad);
 
-    // Get current DLS text
-    const std::string& getDLSText() const { return current_dls_; }
+    // The PAD of a DAB+ AU: in its data stream element, if it starts with one
+    void processAu(const uint8_t* au, size_t au_len);
 
-    // Get current DL Plus tags
-    const std::vector<DLPlusTag>& getDLPlusTags() const { return current_tags_; }
+    // Frames were lost since the last PAD
+    void discontinuity();
+
+    // The current label and its tags
+    const std::string& getDLSText() const { return label_text_; }
+    const std::vector<DLPlusTag>& getDLPlusTags() const { return tags_; }
 
     // Statistics
     size_t getPadCount() const { return pad_count_; }
     size_t getDLSCount() const { return dls_count_; }
     size_t getDLPlusCount() const { return dlplus_count_; }
+    size_t getCrcErrors() const { return crc_errors_; }
 
 private:
-    // Process F-PAD (last 2 bytes)
-    void processFPad(uint8_t fpad_type, uint8_t ci_flag);
+    void subfield(uint8_t app_type, const uint8_t* data, size_t len);
+    void dataGroup(const uint8_t* dg, size_t len);
+    void segment(const uint8_t* dg, size_t field_len);
+    void dlPlus(const uint8_t* dg, size_t field_len);
+    void labelComplete();
+    void emitTags();
 
-    // Process X-PAD based on content indicator (legacy)
-    void processXPad(const uint8_t* xpad, size_t len, uint8_t app_type);
+    // X-PAD: the application type and length of the last data subfield (a
+    // variable X-PAD without contents indicator continues it)
+    uint8_t last_type_ = 0;
+    size_t last_len_ = 0;
 
-    // Process X-PAD data (new implementation)
-    void processXPadData(const uint8_t* xpad, size_t len, uint8_t app_type);
+    // the dynamic label data group being collected
+    std::vector<uint8_t> dg_;
+    size_t dg_need_ = 0;     // its length once its prefix is there, 0 = not yet
+    bool dg_active_ = false;
 
-    // Try to process accumulated Data Group
-    void tryProcessDataGroup();
+    // the label being put together: up to 8 segments of one toggle state
+    int seg_toggle_ = -1;
+    uint8_t seg_charset_ = 0;
+    std::array<std::vector<uint8_t>, 8> seg_;
+    uint8_t seg_have_ = 0;   // bit per segment
+    int seg_last_ = -1;      // number of the last segment, -1 = not seen yet
 
-    // Process DLS data from Data Group
-    void processDLSData(const uint8_t* data, size_t len);
+    // the complete label
+    int label_toggle_ = -1;
+    std::string label_text_;
+    bool label_done_ = false;   // the label of seg_toggle_ was put out
 
-    // Process DLS segment (new dablin-style format)
-    void processDLSSegmentNew(const uint8_t* data, size_t len, bool first, bool last, size_t field_len, bool toggle);
+    // DL Plus tags and the toggle of the label they belong to (link bit)
+    std::vector<DLPlusTag> tags_;
+    int tags_link_ = -1;
+    bool tags_done_ = false;
 
-    // Process DL Plus command from Data Group
-    void processDLPlusCommand(const uint8_t* data, size_t len, bool toggle);
-
-    // Legacy methods (kept for compatibility)
-    void processDataGroup(const uint8_t* data, size_t len);
-    void processDLSSegment(const uint8_t* data, size_t len, bool first, bool last);
-    void processDLPlus(const uint8_t* data, size_t len, bool toggle);
-    bool isValidDLS(const std::string& text);
-    bool isLikelyDLS(const std::string& text);
-
-    // X-PAD state
-    bool xpad_present_ = false;
-    uint8_t xpad_ci_ = 0;          // Content Indicator
-    uint8_t xpad_app_type_ = 0;    // Application Type
-    size_t xpad_len_ = 0;          // Expected X-PAD length
-
-    // Data group reassembly
-    std::vector<uint8_t> dg_buffer_;
-    bool dg_in_progress_ = false;
-    uint8_t dg_type_ = 0;
-
-    // DL Plus segment reassembly (for linked segments)
-    std::vector<uint8_t> dlplus_buffer_;
-    bool dlplus_link_pending_ = false;
-    bool dlplus_pending_toggle_ = false;  // Toggle of pending linked segment
-
-    // DLS reassembly
-    std::array<char, 129> dls_buffer_;  // 128 chars + null
-    size_t dls_len_ = 0;
-    uint8_t dls_charset_ = 0;      // 0=EBU Latin, 15=UTF-8
-    bool dls_first_received_ = false;
-    bool dls_toggle_ = false;      // Toggle bit for current DLS
-
-    // Current state
-    std::string current_dls_;
-    std::vector<DLPlusTag> current_tags_;
-    bool current_dls_toggle_ = false;  // Toggle of completed DLS
-
-    // Callbacks
     DLSCallback dls_callback_;
     DLPlusCallback dlplus_callback_;
 
-    // Statistics
     size_t pad_count_ = 0;
     size_t dls_count_ = 0;
     size_t dlplus_count_ = 0;
-
-    // Note: PAD uses manual DSE parsing (like dablin), not FDK-AAC
+    size_t crc_errors_ = 0;
+    bool charset_warned_ = false;
 };
 
 // Helper: Convert DL Plus content type to string
