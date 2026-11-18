@@ -92,7 +92,7 @@ int main(int argc, char* argv[]) {
     std::map<int, SubchannelData> subchannels;
     size_t af_count = 0;
 
-    UdpExtractor udp_extractor([&](uint32_t ip, uint16_t port,
+    UdpExtractor udp_extractor([&](uint32_t /*ip*/, uint16_t /*port*/,
                                     const uint8_t* payload, size_t len) {
         if (len < 2 || payload[0] != 'P' || payload[1] != 'F') return;
 
@@ -156,7 +156,7 @@ int main(int argc, char* argv[]) {
         if (data.buffer.empty()) continue;
 
         // Determine codec
-        bool is_mp2 = (data.mp2_votes > data.frame_count / 2);
+        bool is_mp2 = (static_cast<size_t>(data.mp2_votes) > data.frame_count / 2);
         const char* ext = is_mp2 ? ".mp2" : ".raw";
         std::string codec = is_mp2 ? "MP2" : "unknown";
 

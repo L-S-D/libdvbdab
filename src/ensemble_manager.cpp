@@ -14,7 +14,6 @@ void EnsembleManager::reset() {
     ensembles_.clear();
     basic_ready_flags_.clear();
     complete_flags_.clear();
-    last_subchannel_map_.clear();
     reported_.clear();
     complete_count_ = 0;
 }
@@ -112,53 +111,9 @@ void EnsembleManager::processUdp(uint32_t dst_ip, uint16_t dst_port, const uint8
         // Store ensemble
         ensembles_[key] = parser.get_ensemble();
 
-        // Initialize subchannel tracking
-        auto& subch_map = last_subchannel_map_[key];
-        for (const auto& svc : ensembles_[key].services) {
-            subch_map[svc.sid] = static_cast<uint8_t>(svc.subchannel_id);
-        }
-
         // Notify complete callback (for SDT update with labels)
         if (complete_callback_) {
             complete_callback_(key, ensembles_[key]);
-        }
-    }
-
-    // After completion, continuously monitor for subchannel changes
-    if (complete_flags_[key] && subchannel_change_callback_) {
-        const auto& current_ensemble = parser.get_ensemble();
-        auto& prev_map = last_subchannel_map_[key];
-        std::vector<SubchannelChange> changes;
-
-        // Build current mapping
-        std::map<uint32_t, uint8_t> current_map;
-        for (const auto& svc : current_ensemble.services) {
-            current_map[svc.sid] = static_cast<uint8_t>(svc.subchannel_id);
-        }
-
-        // Check for changes: new services or subchannel changes
-        for (const auto& [sid, new_subch] : current_map) {
-            auto prev_it = prev_map.find(sid);
-            if (prev_it == prev_map.end()) {
-                // New service
-                changes.push_back({sid, 0xFF, new_subch});
-            } else if (prev_it->second != new_subch) {
-                // Subchannel changed
-                changes.push_back({sid, prev_it->second, new_subch});
-            }
-        }
-
-        // Check for removed services
-        for (const auto& [sid, old_subch] : prev_map) {
-            if (current_map.find(sid) == current_map.end()) {
-                changes.push_back({sid, old_subch, 0xFF});
-            }
-        }
-
-        // Notify if there are changes
-        if (!changes.empty()) {
-            prev_map = current_map;  // Update tracking
-            subchannel_change_callback_(key, changes);
         }
     }
 }

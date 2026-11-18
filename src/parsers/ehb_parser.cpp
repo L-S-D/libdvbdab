@@ -245,7 +245,6 @@ void EhbParser::parseTimePoint(const uint8_t* data, size_t len, time_t& result) 
     time_t base_date = mjdToUnix(mjd);
 
     // Extract flags
-    bool lto_flag = (total_bits > 19) ? ((data[2] >> 4) & 1) : false;
     bool utc_flag = (total_bits > 20) ? ((data[2] >> 3) & 1) : false;
 
     // Extract time fields
@@ -286,7 +285,7 @@ bool EhbParser::parse(const std::string& filename, const uint8_t* data, size_t l
 }
 
 // Parse standard ETSI TS 102 371 TLV format
-bool EhbParser::parseEtsiFormat(const std::string& filename, const uint8_t* data, size_t len) {
+bool EhbParser::parseEtsiFormat(const std::string& /*filename*/, const uint8_t* data, size_t len) {
     size_t pos = 0;
 
     // Check top-level tag

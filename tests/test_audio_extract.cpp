@@ -3,7 +3,7 @@
 
 #include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/edi_parser.hpp"
+#include "../tools/edi_parser.hpp"
 #include "../src/output/dabplus_decoder.hpp"
 #include "../src/output/dab_mp2_decoder.hpp"
 #include <iostream>
@@ -278,12 +278,12 @@ int main(int argc, char* argv[]) {
     AudioExtractor extractor("/tmp/audio", target_scid);
     int frame_count = 0;
 
-    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t dflc) {
+    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t /*dflc*/) {
         extractor.processFrame(frame, len);
         frame_count++;
     });
 
-    dvbdab::UdpExtractor udp_extractor([&](uint32_t ip, uint16_t port,
+    dvbdab::UdpExtractor udp_extractor([&](uint32_t /*ip*/, uint16_t /*port*/,
                                             const uint8_t* payload, size_t len) {
         edi_parser.feed(payload, len);
     });

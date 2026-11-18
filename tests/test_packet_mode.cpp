@@ -79,6 +79,7 @@ int main(int argc, char* argv[]) {
     PacketDecoder packet_decoder;
     bool stream_found = false;
     int target_stream_index = -1;
+    (void)target_stream_index;
 
     // Map from subchannel ID to stream index in ETI
     std::map<int, int> subch_to_stream;

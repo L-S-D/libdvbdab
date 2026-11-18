@@ -38,7 +38,7 @@ void MpeExtractor::process(const uint8_t* ts, uint16_t target_pid, uint32_t filt
         if (ptr > 0 && ptr <= len) {
             if (in_section) {
                 buffer.insert(buffer.end(), p, p + ptr);
-                if (buffer.size() >= section_len + 3 && buffer[0] == 0x3E)
+                if (buffer.size() >= static_cast<size_t>(section_len) + 3 && buffer[0] == 0x3E)
                     extractUdp(buffer.data(), buffer.size(), filter_ip, filter_port);
             }
             p += ptr; len -= ptr;
@@ -68,7 +68,7 @@ void MpeExtractor::process(const uint8_t* ts, uint16_t target_pid, uint32_t filt
         size_t needed = (section_len + 3) - buffer.size();
         size_t to_copy = std::min(needed, (size_t)len);
         buffer.insert(buffer.end(), p, p + to_copy);
-        if (buffer.size() >= section_len + 3) {
+        if (buffer.size() >= static_cast<size_t>(section_len) + 3) {
             if (buffer[0] == 0x3E) extractUdp(buffer.data(), buffer.size(), filter_ip, filter_port);
             buffer.clear(); in_section = false;
         }

@@ -122,141 +122,6 @@ void PacketDecoder::feedSubchannelData(const uint8_t* data, size_t len) {
     }
 }
 
-void PacketDecoder::parseMscDataGroups() {
-    // For MOT header mode (EN 301 234), data groups must have:
-    // - CRC flag = 1
-    // - Segment flag = 1 (segmented transfer)
-    // - User Access flag = 1 (transport ID present)
-    // Valid MOT data group patterns:
-    // - 0x73 = Type 3 (MOT-Header) with seg+ua+crc
-    // - 0x74 = Type 4 (MOT-Body) with seg+ua+crc
-    // - 0xF3/0xF4 = with extension flag
-
-    size_t pos = 0;
-
-    while (pos + 16 < stream_buffer_.size()) {
-        const uint8_t* buf = stream_buffer_.data() + pos;
-
-        uint8_t b0 = buf[0];
-        uint8_t dg_type = b0 & 0x0F;
-        bool ext_flag = (b0 >> 7) & 1;
-        bool crc_flag = (b0 >> 6) & 1;
-        bool seg_flag = (b0 >> 5) & 1;
-        bool ua_flag = (b0 >> 4) & 1;
-
-        // MOT requires type 3 or 4 with CRC, Segment, and UA flags set
-        bool is_mot = (dg_type == 3 || dg_type == 4) && crc_flag && seg_flag && ua_flag;
-
-        if (is_mot) {
-
-            // Calculate header length and parse fields
-            // Header structure:
-            // - Byte 0: flags + type
-            // - Byte 1: CI(4) + RepIdx(4)
-            // - Bytes 2-3: Extension (if ext_flag)
-            // - Bytes 2-3 or 4-5: Segment field (Last + SegNum)
-            // - User Access field (if ua_flag): RFA(3) + TID_flag(1) + LenInd(4) + data
-
-            size_t hdr_len = 2;
-            size_t seg_offset = 2;
-
-            if (ext_flag) {
-                seg_offset = 4;
-                hdr_len += 2;
-            }
-
-            // Segment field (we know seg_flag=true for MOT)
-            hdr_len += 2;  // Segment field is 2 bytes
-
-            // User Access field (we know ua_flag=true for MOT)
-            size_t ua_offset = hdr_len;
-            if (pos + ua_offset >= stream_buffer_.size()) {
-                pos++;
-                continue;
-            }
-            uint8_t rfa_tid_len = buf[ua_offset];
-            bool tid_flag = (rfa_tid_len >> 4) & 1;
-            uint8_t len_ind = rfa_tid_len & 0x0F;
-
-            // MOT requires transport ID - skip if not present
-            if (!tid_flag || len_ind < 2) {
-                pos++;
-                continue;
-            }
-
-            hdr_len += 1 + len_ind;  // UA header byte + UA data
-
-            // Skip if header would exceed buffer
-            if (pos + hdr_len + 4 >= stream_buffer_.size()) {
-                pos++;
-                continue;
-            }
-
-            // Parse segment info
-            bool is_last = (buf[seg_offset] >> 7) & 1;
-            uint16_t seg_num = ((buf[seg_offset] & 0x7F) << 8) | buf[seg_offset + 1];
-
-            // Parse transport ID from User Access field
-            uint16_t transport_id = (buf[ua_offset + 1] << 8) | buf[ua_offset + 2];
-
-            // Validate transport ID is non-zero
-            if (transport_id == 0) {
-                pos++;
-                continue;
-            }
-
-            // Only parse segment 0 for MOT header structure
-            bool is_first_segment = (seg_num == 0);
-
-            // Try different data lengths
-            // MOT segments are typically 300-1500 bytes (optimize by stepping)
-            // Step by 1 for small lengths, by larger steps for bigger lengths
-            for (size_t try_len = 16; try_len <= 1600 && pos + hdr_len + try_len + 2 <= stream_buffer_.size(); ) {
-                size_t total_len = hdr_len + try_len + 2;
-
-                uint16_t calc_crc = crc16(buf, hdr_len + try_len);
-                uint16_t recv_crc = (buf[hdr_len + try_len] << 8) | buf[hdr_len + try_len + 1];
-
-                if (calc_crc == recv_crc) {
-                    const uint8_t* payload = buf + hdr_len;
-
-                    // Trust CRC validation - only light sanity checks
-                    bool valid_mot = true;
-
-                    // For segment 0, check content type is valid (0-7)
-                    if (is_first_segment && dg_type == 3 && try_len >= 7) {
-                        uint8_t content_type = ((payload[3] & 0x0F) << 2) | ((payload[4] >> 6) & 0x03);
-                        if (content_type > 7) valid_mot = false;
-                    }
-
-                    if (valid_mot) {
-                        // Accumulate this segment for reassembly
-                        processMotDataGroup(dg_type, transport_id, seg_num, is_last,
-                                           payload, try_len);
-
-                        dg_count_++;
-                        pos += total_len;
-                        goto next_position;
-                    }
-                }
-
-                // Step size depends on current length (optimize search)
-                if (try_len < 100) try_len += 4;
-                else if (try_len < 500) try_len += 8;
-                else try_len += 16;
-            }
-        }
-
-        pos++;
-        next_position:;
-    }
-
-    // Keep last part of buffer for cross-frame data groups
-    if (stream_buffer_.size() > 4096) {
-        stream_buffer_.erase(stream_buffer_.begin(), stream_buffer_.end() - 2048);
-    }
-}
-
 void PacketDecoder::processMotDataGroup(uint8_t dg_type, uint16_t transport_id,
                                          uint16_t seg_num, bool is_last,
                                          const uint8_t* payload, size_t payload_len) {
@@ -812,11 +677,9 @@ void PacketDecoder::checkMotObjectComplete(uint16_t transport_id) {
     if (obj.body_last_seg < 0) return;  // Don't know last segment yet
 
     bool body_complete = true;
-    int missing_seg = -1;
     for (int i = 0; i <= obj.body_last_seg; i++) {
         if (obj.body_segments.find(i) == obj.body_segments.end()) {
             body_complete = false;
-            missing_seg = i;
             break;
         }
     }

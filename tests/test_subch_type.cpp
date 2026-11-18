@@ -1,7 +1,7 @@
 // Extract raw subchannel data and analyze for MP2/DAB+ signatures
 #include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/edi_parser.hpp"
+#include "../tools/edi_parser.hpp"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -78,7 +78,7 @@ int main(int argc, char* argv[]) {
     int frame_count = 0;
     const int MAX_FRAMES = 10;  // Get 10 frames = 2 superframes
 
-    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t dflc) {
+    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t /*dflc*/) {
         if (len != 6144 || frame_count >= MAX_FRAMES) return;
 
         uint8_t nst = frame[5] & 0x7F;
@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
         frame_count++;
     });
 
-    dvbdab::UdpExtractor udp_extractor([&](uint32_t ip, uint16_t port,
+    dvbdab::UdpExtractor udp_extractor([&](uint32_t /*ip*/, uint16_t /*port*/,
                                             const uint8_t* payload, size_t len) {
         edi_parser.feed(payload, len);
     });
@@ -161,7 +161,7 @@ int main(int argc, char* argv[]) {
             }
             if (!has_mp2) {
                 std::cout << "DATA (first 16: ";
-                for (int i = 0; i < 16 && i < sc.data.size(); i++)
+                for (size_t i = 0; i < 16 && i < sc.data.size(); i++)
                     printf("%02x ", sc.data[i]);
                 std::cout << ")" << std::endl;
             }

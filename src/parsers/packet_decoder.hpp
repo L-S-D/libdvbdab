@@ -132,8 +132,6 @@ private:
     // Parse MOT directory (data group type 6)
     void parseMotDirectory(const uint8_t* data, size_t len);
 
-    // Parse MSC data groups directly (for transparent mode DG=1)
-    void parseMscDataGroups();
 
     // Process a validated MOT data group
     void processMotDataGroup(uint8_t dg_type, uint16_t transport_id,

@@ -24,16 +24,6 @@ using EnsembleChangedCallback = std::function<void(const StreamKey& key, const D
 // dflc = Data Flow Counter (0-7999) for continuity checking
 using EtiFrameCallback = std::function<void(const StreamKey& key, const uint8_t* data, size_t len, uint16_t dflc)>;
 
-// Subchannel change info for dynamic PMT updates
-struct SubchannelChange {
-    uint32_t sid;              // Service ID that changed
-    uint8_t old_subchannel_id; // Previous subchannel (0xFF if new service)
-    uint8_t new_subchannel_id; // New subchannel (0xFF if service removed)
-};
-
-// Callback for subchannel mapping changes (for dynamic PMT updates)
-using SubchannelChangeCallback = std::function<void(const StreamKey& key, const std::vector<SubchannelChange>& changes)>;
-
 // Manages multiple DAB ensembles, routing UDP packets by destination ip:port
 class EnsembleManager {
 public:
@@ -65,10 +55,6 @@ public:
         eti_ex_callback_ = std::move(callback);
     }
 
-    // Set callback for subchannel mapping changes (for dynamic PMT updates)
-    void setSubchannelChangeCallback(SubchannelChangeCallback callback) {
-        subchannel_change_callback_ = std::move(callback);
-    }
 
     // Process a UDP packet (dst_ip, dst_port, payload)
     // Routes to the appropriate per-stream parser
@@ -141,10 +127,7 @@ private:
                       bool report_now);
     EtiFrameCallback eti_callback_;
     EtiFrameExCallback eti_ex_callback_;
-    SubchannelChangeCallback subchannel_change_callback_;
 
-    // Track previous subchannel mappings for change detection
-    std::map<StreamKey, std::map<uint32_t, uint8_t>> last_subchannel_map_;  // key -> (sid -> subchannel_id)
 
     // ETI-NA parsers (keyed by PID) - for direct ETI-NI frame processing
     std::map<uint16_t, std::unique_ptr<DABParser>> etina_parsers_;

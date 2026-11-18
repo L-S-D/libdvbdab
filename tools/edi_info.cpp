@@ -251,9 +251,9 @@ int main(int argc, char* argv[]) {
         }
 
         std::string codec = "unknown";
-        if (info.mp2_votes > info.frame_count / 2) {
+        if (static_cast<size_t>(info.mp2_votes) > info.frame_count / 2) {
             codec = "MP2";
-        } else if (info.dabplus_votes > info.frame_count / 10) {
+        } else if (static_cast<size_t>(info.dabplus_votes) > info.frame_count / 10) {
             codec = "DAB+";
         } else if (bitrate_kbps < 16) {
             codec = "data";

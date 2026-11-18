@@ -69,7 +69,7 @@ void EdiParser::feed(const std::uint8_t* data, std::size_t len) {
     }
 }
 
-bool EdiParser::handlePfPacket(const std::uint8_t* data, std::size_t len) {
+bool EdiParser::handlePfPacket(const std::uint8_t* /*data*/, std::size_t /*len*/) {
     // Not used - feed() handles PF directly now
     return true;
 }

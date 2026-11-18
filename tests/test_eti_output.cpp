@@ -1,7 +1,7 @@
 // Test full library pipeline: test::MpeIpSource → UdpExtractor → EdiParser → ETI frames
 #include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/edi_parser.hpp"
+#include "../tools/edi_parser.hpp"
 #include <iostream>
 #include <fstream>
 #include <arpa/inet.h>
@@ -69,7 +69,9 @@ int main(int argc, char* argv[]) {
         // Parse FC to find structure
         uint8_t nst = frame[5] & 0x3F;
         bool ficf = (frame[5] >> 7) & 1;
+        (void)ficf;
         uint8_t mid = (frame[6] >> 3) & 0x03;
+        (void)mid;
         uint16_t fl = ((frame[6] & 0x07) << 8) | frame[7];
 
         // EOH position: after FC (4 bytes) + STC entries (NST*4 bytes)
@@ -123,7 +125,7 @@ int main(int argc, char* argv[]) {
     });
 
     // UDP callback - feed to EdiParser
-    dvbdab::UdpExtractor udp_extractor([&](uint32_t ip, uint16_t port, const uint8_t* payload, size_t len) {
+    dvbdab::UdpExtractor udp_extractor([&](uint32_t /*ip*/, uint16_t /*port*/, const uint8_t* payload, size_t len) {
         udp_packets++;
         edi_parser.feed(payload, len);
     });

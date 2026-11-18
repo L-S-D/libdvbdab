@@ -30,8 +30,12 @@ void* operator new(std::size_t n) {
     if (!p) throw std::bad_alloc();
     return p;
 }
+// (GCC sees the free() of what its own operator new gave and warns: this pair is the match)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
 void operator delete(void* p) noexcept { std::free(p); }
 void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+#pragma GCC diagnostic pop
 
 using Bytes = std::vector<uint8_t>;
 

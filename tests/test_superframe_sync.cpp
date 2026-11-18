@@ -3,7 +3,7 @@
 
 #include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/edi_parser.hpp"
+#include "../tools/edi_parser.hpp"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -71,7 +71,7 @@ public:
         size_t offset = eoh_end + fic_len;
 
         // Extract each subchannel's data
-        for (int i = 0; i < nst && i < subchannels_.size(); i++) {
+        for (int i = 0; i < nst && static_cast<size_t>(i) < subchannels_.size(); i++) {
             size_t size = subchannels_[i].stl * 8;
             if (offset + size <= len) {
                 subchannels_[i].buffer.insert(
@@ -111,6 +111,7 @@ public:
 
                     // Parse header
                     uint8_t hdr = sc.buffer[pos + 2];
+                    (void)hdr;
                     break;
                 }
             }
@@ -220,14 +221,14 @@ int main(int argc, char* argv[]) {
     int frame_count = 0;
     const int MAX_FRAMES = 100;  // Check first 100 frames (20 superframes)
 
-    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t dflc) {
+    EdiParser edi_parser([&](const uint8_t* frame, size_t len, uint16_t /*dflc*/) {
         if (frame_count < MAX_FRAMES) {
             checker.processFrame(frame, len);
             frame_count++;
         }
     });
 
-    dvbdab::UdpExtractor udp_extractor([&](uint32_t ip, uint16_t port,
+    dvbdab::UdpExtractor udp_extractor([&](uint32_t /*ip*/, uint16_t /*port*/,
                                             const uint8_t* payload, size_t len) {
         edi_parser.feed(payload, len);
     });

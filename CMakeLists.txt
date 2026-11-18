@@ -11,9 +11,24 @@ endif()
 
 project(libdvbdab LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+# C++17 is what the library needs (it builds with GCC 9 and clang 10 on)
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 17)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Without a build type the compiler does not optimize at all
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
+endif()
+
+# The library and its tests build without a warning under these; turn them
+# off for a compiler that knows better
+option(DVBDAB_WARNINGS "Build with -Wall -Wextra" ON)
+if(DVBDAB_WARNINGS AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    add_compile_options(-Wall -Wextra)
+endif()
 
 # -DDVBDAB_FUZZ=ON: a fuzzing build - every checksum counts as right (see
 # CHECKSUMS_CHECKED in src/utils/crc_utils.hpp), the harnesses in fuzz/ are
@@ -60,7 +75,6 @@ add_library(dvbdab STATIC
     src/dab_stream_parser.cpp
     src/discover.cpp
     src/logging.cpp
-    src/output/ts_streamer.cpp
     src/output/dabplus_decoder.cpp
     src/output/dab_mp2_decoder.cpp
     src/output/pad_decoder.cpp
@@ -84,9 +98,13 @@ target_link_libraries(dvbdab pthread ZLIB::ZLIB ${PUGIXML_LIBRARIES})
 # DAB+ transcoding (DVBDAB_AAC_TRANSCODE): faad2 decodes the 960-sample AUs
 # with SBR/PS, libavcodec encodes AAC-LC; both found, it is built in. faad2 is
 # GPL: a library built with it is GPL as a whole.
-option(DVBDAB_TRANSCODE "DAB+ audio transcoding with faad2 and libavcodec (when found)" ON)
+# -DDVBDAB_TRANSCODE=AUTO (built in when both are found), ON (they must be
+# there) or OFF. Without it DAB+ comes out as it is (ADTS or LATM), and a
+# player that takes its frames of 960 samples for 1024 plays it too slow.
+set(DVBDAB_TRANSCODE "AUTO" CACHE STRING "DAB+ transcoding with faad2 and libavcodec: AUTO, ON or OFF")
+set_property(CACHE DVBDAB_TRANSCODE PROPERTY STRINGS AUTO ON OFF)
 set(DVBDAB_PC_LIBS "")
-if(DVBDAB_TRANSCODE)
+if(NOT DVBDAB_TRANSCODE STREQUAL "OFF")
     pkg_check_modules(FAAD2 QUIET faad2)
     pkg_check_modules(LIBAV QUIET libavcodec libavutil)
     if(FAAD2_FOUND AND LIBAV_FOUND)
@@ -104,9 +122,14 @@ if(DVBDAB_TRANSCODE)
         string(JOIN " " DVBDAB_PC_LIBS ${FAAD2_LDFLAGS} ${LIBAV_LDFLAGS})
         set(DVBDAB_PC_LIBS " ${DVBDAB_PC_LIBS}")
         message(STATUS "DAB+ transcoding: faad2 ${FAAD2_VERSION}, libavcodec ${LIBAV_libavcodec_VERSION}")
+    elseif(DVBDAB_TRANSCODE STREQUAL "AUTO")
+        message(WARNING "DAB+ transcoding is not built in: faad2 or libavcodec (with libavutil) not found. "
+                        "-DDVBDAB_TRANSCODE=OFF says that this is meant.")
     else()
-        message(STATUS "DAB+ transcoding: off (faad2 or libavcodec not found)")
+        message(FATAL_ERROR "DVBDAB_TRANSCODE=${DVBDAB_TRANSCODE}, but faad2 or libavcodec (with libavutil) was not found")
     endif()
+else()
+    message(STATUS "DAB+ transcoding: off")
 endif()
 target_link_directories(dvbdab PUBLIC ${PUGIXML_LIBRARY_DIRS})
 # linked into position independent executables (tvheadend links with -pie),
@@ -199,21 +222,21 @@ add_executable(test_fct_gaps
 add_executable(test_eti_output
     tests/test_eti_output.cpp
     src/parsers/udp_extractor.cpp
-    src/edi_parser.cpp
+    tools/edi_parser.cpp
 )
 
 # Test superframe sync detection and firecode verification
 add_executable(test_superframe_sync
     tests/test_superframe_sync.cpp
     src/parsers/udp_extractor.cpp
-    src/edi_parser.cpp
+    tools/edi_parser.cpp
 )
 
 # Test audio extraction from DAB/DAB+ subchannels
 add_executable(test_audio_extract
     tests/test_audio_extract.cpp
     src/parsers/udp_extractor.cpp
-    src/edi_parser.cpp
+    tools/edi_parser.cpp
     src/output/dabplus_decoder.cpp
     src/output/pad_decoder.cpp
     src/output/charsets.cpp
@@ -227,7 +250,7 @@ target_link_libraries(test_audio_extract ZLIB::ZLIB)
 add_executable(test_subch_type
     tests/test_subch_type.cpp
     src/parsers/udp_extractor.cpp
-    src/edi_parser.cpp
+    tools/edi_parser.cpp
 )
 
 # Test TsScanner - auto-detect DAB ensembles from raw TS
@@ -280,7 +303,7 @@ target_link_libraries(test_ehb_eit dvbdab)
 
 # edi_info - Analyze EDI streams and show subchannel info
 add_executable(edi_info
-    src/edi_info.cpp
+    tools/edi_info.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
     src/logging.cpp
@@ -288,7 +311,7 @@ add_executable(edi_info
 
 # edi_extract - Extract audio from EDI streams without FIC
 add_executable(edi_extract
-    src/edi_extract.cpp
+    tools/edi_extract.cpp
     src/parsers/udp_extractor.cpp
     src/parsers/pf_reassembler.cpp
     src/logging.cpp
@@ -382,15 +405,12 @@ install(FILES
 
 install(FILES
     src/output/ts_muxer.hpp
-    src/output/ts_streamer.hpp
     src/output/dab_stream_processor.hpp
     src/output/dabplus_decoder.hpp
     src/output/aac_transcoder.hpp
     src/output/dab_mp2_decoder.hpp
     src/output/pad_decoder.hpp
-    src/output/metadata_bridge.hpp
     src/output/spi_schedule_bridge.hpp
-    src/output/ehb_schedule_bridge.hpp
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/dvbdab/output
 )
 

@@ -16,7 +16,7 @@ namespace dvbdab {
 
 SpiParser::SpiParser() = default;
 
-void SpiParser::onMotObject(uint16_t transport_id, const MOTHeaderInfo& header,
+void SpiParser::onMotObject(uint16_t /*transport_id*/, const MOTHeaderInfo& header,
                              const uint8_t* data, size_t len) {
     // Check if this is an XML file (SPI uses content type 2 = general data)
     // The content_name should indicate XML
@@ -64,7 +64,7 @@ void SpiParser::onMotObject(uint16_t transport_id, const MOTHeaderInfo& header,
     parseSpiXml(data, len, header.content_name);
 }
 
-bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& filename) {
+bool SpiParser::parseSpiXml(const uint8_t* data, size_t len, const std::string& /*filename*/) {
     pugi::xml_document doc;
     pugi::xml_parse_result result = doc.load_buffer(data, len);
 

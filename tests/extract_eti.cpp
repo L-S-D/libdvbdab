@@ -1,7 +1,7 @@
 // Extract raw ETI frames from MPE TS file
 #include "support/mpe_ip_source.hpp"
 #include "../src/parsers/udp_extractor.hpp"
-#include "../src/edi_parser.hpp"
+#include "../tools/edi_parser.hpp"
 #include <iostream>
 #include <fstream>
 #include <arpa/inet.h>
