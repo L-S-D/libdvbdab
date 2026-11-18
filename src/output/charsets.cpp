@@ -65,7 +65,7 @@ constexpr uint16_t RDS_G0[256] = {
     0x0070, 0x0071, 0x0072, 0x0073, 0x0074, 0x0075, 0x0076, 0x0077,  // 0x70
     0x0078, 0x0079, 0x007A, 0x007B, 0x007C, 0x007D, 0x00AF, 0,
     0x00E1, 0x00E0, 0x00E9, 0x00E8, 0x00ED, 0x00EC, 0x00F3, 0x00F2,  // 0x80
-    0x00FA, 0x00F9, 0x00D1, 0x00C7, 0x015E, 0x03B2, 0x00A1, 0x0132,
+    0x00FA, 0x00F9, 0x00D1, 0x00C7, 0x015E, 0x00DF, 0x00A1, 0x0132,  // 0x8D: sharp s (receivers show it so)
     0x00E2, 0x00E4, 0x00EA, 0x00EB, 0x00EE, 0x00EF, 0x00F4, 0x00F6,  // 0x90
     0x00FB, 0x00FC, 0x00F1, 0x00E7, 0x015F, 0x01E7, 0x0131, 0x0133,
     0x00AA, 0x03B1, 0x00A9, 0x2030, 0x01E6, 0x011B, 0x0148, 0x0151,  // 0xA0
@@ -154,10 +154,24 @@ std::string utf8ToRds(const std::string& utf8) {
             if (RDS_G0[c]) m[RDS_G0[c]] = static_cast<uint8_t>(c);
         return m;
     }();
+    // characters the set does not have, by what comes closest in it
+    static const std::map<uint32_t, const char*> closest = {
+        {0x03B2, "\x8D"},                    // beta: the code of sharp s
+        {0x2018, "'"}, {0x2019, "'"}, {0x201A, "'"}, {0x2032, "'"},
+        {0x201C, "\""}, {0x201D, "\""}, {0x201E, "\""}, {0x00AB, "\""}, {0x00BB, "\""},
+        {0x2010, "-"}, {0x2011, "-"}, {0x2012, "-"}, {0x2013, "-"}, {0x2014, "-"},
+        {0x2026, "..."}, {0x00A0, " "}, {0x2022, "*"},
+    };
     std::string out;
     for (size_t i = 0; i < utf8.size();) {
-        auto it = to_rds.find(nextUtf8(utf8, i));
-        out.push_back(static_cast<char>(it != to_rds.end() ? it->second : '?'));
+        uint32_t cp = nextUtf8(utf8, i);
+        auto it = to_rds.find(cp);
+        if (it != to_rds.end()) {
+            out.push_back(static_cast<char>(it->second));
+            continue;
+        }
+        auto alt = closest.find(cp);
+        out += alt != closest.end() ? alt->second : "?";
     }
     return out;
 }

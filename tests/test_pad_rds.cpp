@@ -137,6 +137,9 @@ int main() {
     }
     {
         check(utf8ToRds("\xC3\xA4") == "\x91", "RDS: a with diaeresis");
+        check(utf8ToRds("Fu\xC3\x9F" "ball") == "Fu\x8D" "ball", "RDS: sharp s");
+        check(utf8ToRds("\xE2\x80\x9C" "a\xE2\x80\x9D \xE2\x80\x93 b\xE2\x80\x99s\xE2\x80\xA6") == "\"a\" - b's...",
+              "RDS: typographic quotes, dash and ellipsis by what comes closest");
         check(utf8ToRds("\xE4\xB8\xAD") == "?", "RDS: a character the set does not have becomes ?");
         std::string longtext;
         for (int i = 0; i < 20; i++) longtext += "word" + std::to_string(i) + " ";
