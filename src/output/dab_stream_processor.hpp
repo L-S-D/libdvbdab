@@ -140,6 +140,7 @@ private:
     static constexpr size_t MAX_DATA_SUBCHANNELS = 8;
     std::set<uint8_t> data_subchannels_;
     std::map<uint16_t, uint32_t> processed_files_;  // MOT transport id -> hash of the EHB file parsed
+    std::set<uint16_t> mot_objects_seen_;            // transport ids that were logged
     EhbParser ehb_parser_;
 
     // Buffer for early EPG schedules (before muxer configured) - SAME as test_custom_muxer

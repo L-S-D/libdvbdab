@@ -1,8 +1,16 @@
 #include "ts_muxer.hpp"
 #include "rds_uecp.hpp"
+#include "../dab_tables.hpp"
 #include <algorithm>
 
 namespace dvbdab {
+
+// The language of the texts of a schedule: the one the programme guide says
+// for itself, else the one of the audio of the service; "" when neither is said
+static std::string eitLanguage(const EpgSchedule& schedule, const TsService& svc) {
+    std::string own = iso639ForDvb(schedule.language);
+    return own.empty() ? svc.language : own;
+}
 
 TsMuxer::TsMuxer() = default;
 
@@ -209,6 +217,11 @@ void TsMuxer::updateSchedule(uint16_t service_id, const EpgSchedule& schedule) {
     existing.service_id = schedule.service_id;
     existing.service_name = schedule.service_name;
     existing.last_update = schedule.last_update;
+    // the language its texts are in, when the guide says it
+    if (!schedule.language.empty() && existing.language != schedule.language) {
+        existing.language = schedule.language;
+        schedule_changed_[service_id] = true;
+    }
 
     // Add new programmes; one with the start time of one that is there
     // replaces it when it says something else (a corrected title or
@@ -302,7 +315,8 @@ void TsMuxer::outputEitScheduleCarousel() {
         const TsService& svc = services_[sid_to_index_[service_id]];
         for (const auto& section : buildEitScheduleSections(service_id, tsid_, onid_,
                                                             eit_schedule_version_[service_id],
-                                                            schedule.programmes, svc.language, svc.content)) {
+                                                            schedule.programmes, eitLanguage(schedule, svc),
+                                                            svc.content)) {
             outputSection(PID_EIT, section);
         }
     }
@@ -530,7 +544,8 @@ void TsMuxer::outputEitPresentFollowing() {
 
         const TsService& svc = services_[idx->second];
         for (const auto& section : buildEitPresentFollowingSections(service_id, tsid_, onid_, pf.version, present,
-                                                                    following, svc.language, svc.content)) {
+                                                                    following, eitLanguage(schedule, svc),
+                                                                    svc.content)) {
             outputSection(PID_EIT, section);
         }
     }

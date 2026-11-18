@@ -67,9 +67,11 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     of the ensemble, and the next one), TDT. The SDT says for each service
     which EIT it has.
   - The PMT has the language of the audio (ISO 639-2) when the ensemble
-    says it. EIT events are in that language ("und" without) and carry the
-    programme type of the service as their content (genre; the RDS types of
-    the international table 1, put into the DVB content codes).
+    says it. EIT events are in the language the programme guide says for
+    itself (its default language), else in that of the audio, else "und";
+    they carry the programme type of the service as their content (genre;
+    the RDS types of the international table 1, put into the DVB content
+    codes).
   - The TDT has the time of the ensemble, not the clock of the host: none
     when the ensemble sends no time.
   - Deterministic PID allocation based on subchannel ID: PMT 0x100, audio
@@ -87,8 +89,12 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     not fit the fields of RT+, is left out.
 
 - **EPG Support**
-  - EHB (ETSI TS 102 371) schedule parsing
-  - SPI (Service and Programme Information) parsing
+  - The programme information files of the binary SPI/EPG (ETSI TS 102 371,
+    `.EHB` in a MOT carousel): schedules with title, description, and the
+    language they are in
+  - Not used: the service information file (`.EIB`), station logos and
+    other MOT objects of the carousel (the log names them at level debug);
+    the XML form of SPI (there is a parser for it, nothing feeds it)
 
 - **C API** for easy integration with C applications
 

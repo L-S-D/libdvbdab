@@ -48,6 +48,7 @@ struct EpgSchedule {
     std::string service_name;       // Service name from SPI
     std::vector<EpgProgramme> programmes;
     time_t last_update = 0;         // When this schedule was last updated
+    std::string language;           // Language of its texts (ISO 639, two or three letters); empty: not said
 };
 
 // Callback for parsed EPG schedules

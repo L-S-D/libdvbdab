@@ -30,6 +30,7 @@ struct ServiceSchedule {
     std::string service_name;
     std::vector<EpgEvent> events;
     time_t base_date = 0;         // Base date from filename
+    std::string language;         // Default language of the file (ISO 639, two or three letters); empty: not said
 };
 
 // Callback for parsed schedules

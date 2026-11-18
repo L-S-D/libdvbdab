@@ -62,7 +62,36 @@ const uint8_t PTY_CONTENT[30] = {
     0x23,  // 29 Documentary          -> documentary
 };
 
+// ISO 639-1 to ISO 639-2/B: the languages of the two tables above that have
+// a code of two letters
+const char* const ISO639_1_TO_2[][2] = {
+    {"sq", "alb"}, {"br", "bre"}, {"ca", "cat"}, {"hr", "hrv"}, {"cy", "wel"}, {"cs", "cze"}, {"da", "dan"},
+    {"de", "ger"}, {"en", "eng"}, {"es", "spa"}, {"eo", "epo"}, {"et", "est"}, {"eu", "baq"}, {"fo", "fao"},
+    {"fr", "fre"}, {"fy", "fry"}, {"ga", "gle"}, {"gd", "gla"}, {"gl", "glg"}, {"is", "ice"}, {"it", "ita"},
+    {"se", "sme"}, {"la", "lat"}, {"lv", "lav"}, {"lb", "ltz"}, {"lt", "lit"}, {"hu", "hun"}, {"mt", "mlt"},
+    {"nl", "dut"}, {"no", "nor"}, {"nb", "nob"}, {"nn", "nno"}, {"oc", "oci"}, {"pl", "pol"}, {"pt", "por"},
+    {"ro", "rum"}, {"rm", "roh"}, {"sr", "srp"}, {"sk", "slo"}, {"sl", "slv"}, {"fi", "fin"}, {"sv", "swe"},
+    {"tr", "tur"}, {"wa", "wln"}, {"am", "amh"}, {"ar", "ara"}, {"hy", "arm"}, {"as", "asm"}, {"az", "aze"},
+    {"bm", "bam"}, {"be", "bel"}, {"bn", "ben"}, {"bg", "bul"}, {"my", "bur"}, {"zh", "chi"}, {"cv", "chv"},
+    {"ff", "ful"}, {"ka", "geo"}, {"el", "gre"}, {"gu", "guj"}, {"gn", "grn"}, {"ha", "hau"}, {"he", "heb"},
+    {"hi", "hin"}, {"id", "ind"}, {"ja", "jpn"}, {"kn", "kan"}, {"kk", "kaz"}, {"km", "khm"}, {"ko", "kor"},
+    {"lo", "lao"}, {"mk", "mac"}, {"mg", "mlg"}, {"ms", "may"}, {"mr", "mar"}, {"ne", "nep"}, {"or", "ori"},
+    {"fa", "per"}, {"pa", "pan"}, {"ps", "pus"}, {"qu", "que"}, {"ru", "rus"}, {"sn", "sna"}, {"si", "sin"},
+    {"so", "som"}, {"sw", "swa"}, {"tg", "tgk"}, {"ta", "tam"}, {"tt", "tat"}, {"te", "tel"}, {"th", "tha"},
+    {"uk", "ukr"}, {"ur", "urd"}, {"uz", "uzb"}, {"vi", "vie"}, {"zu", "zul"},
+};
+
 } // namespace
+
+std::string iso639ForDvb(const std::string& language) {
+    if (language.size() == 3) return language;
+    if (language.size() == 2) {
+        for (const auto& pair : ISO639_1_TO_2) {
+            if (language == pair[0]) return pair[1];
+        }
+    }
+    return "";
+}
 
 const char* dabLanguageIso639(uint8_t language) {
     if (language < 0x2C) return LANGUAGES_LOW[language];

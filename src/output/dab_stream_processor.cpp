@@ -18,6 +18,7 @@ EpgSchedule DabStreamProcessor::convertSchedule(const ServiceSchedule& schedule)
     epg_schedule.service_id = schedule.service_id;
     epg_schedule.service_name = schedule.service_name;
     epg_schedule.last_update = time(nullptr);
+    epg_schedule.language = schedule.language;
 
     for (const auto& event : schedule.events) {
         EpgProgramme prog;
@@ -424,6 +425,13 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
             // Wire to EHB parser for EPG files
             decoder->setMotCallback([this](uint16_t tid,
                     const MOTHeaderInfo& hdr, const uint8_t* file_data, size_t file_len) {
+                // every object once (by its transport id), to see what a data service carries
+                if (mot_objects_seen_.size() < 4096 && mot_objects_seen_.insert(tid).second) {
+                    LOG_DEBUG(MOT, "object 0x" << std::hex << tid << std::dec << ": \"" << hdr.content_name
+                              << "\", content type " << static_cast<int>(hdr.content_type) << "/"
+                              << static_cast<int>(hdr.content_subtype) << ", " << file_len << " bytes"
+                              << (file_len >= 2 && file_data[0] == 0x1F && file_data[1] == 0x8B ? " (gzip)" : ""));
+                }
                 if (hdr.content_name.find(".EHB") != std::string::npos) {
                     // again only when it is another file: a transport id
                     // comes again with new content (the counter wraps)

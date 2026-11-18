@@ -5,6 +5,7 @@
 // dropped from it. Synthetic frames, no capture needed.
 
 #include "../src/output/dab_stream_processor.hpp"
+#include "../src/dab_tables.hpp"
 #include "../src/utils/crc_utils.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -392,6 +393,30 @@ int main() {
                   has(nor[0], {0x54, 0x02, 0x62, 0x00}) && nor[0].size() == und[0].size() + 3 * 4 &&
                   dvb_crc32(nor[0].data(), nor[0].size()) == 0,
               "EIT events are in the language of the service and have its content; 'und' and none without");
+
+        // the language a programme guide says for itself comes before the one of the audio
+        {
+            DabStreamProcessor p;
+            std::vector<uint8_t> ts;
+            p.setOutput([&](const uint8_t* d, size_t len) { ts.insert(ts.end(), d, d + len); });
+            add_services(p, 1);
+            EpgSchedule de = schedule(0x1000, now, 3, 1800);
+            de.language = "de";
+            p.getMuxer().updateSchedule(0x1000, de);
+            p.updateServiceInfo(0x1000, "ita", 0);
+            run(p, 1, 12);
+            const uint8_t g2[] = {'g', 'e', 'r'}, i2[] = {'i', 't', 'a'};
+            // (the PMT has "ita" in its language descriptor: look for the short_event_descriptor's)
+            size_t n_ger = 0, n_ita_event = 0;
+            for (size_t i = 0; i + 5 < ts.size(); i++) {
+                if (ts[i] == 0x4D && std::equal(g2, g2 + 3, ts.begin() + static_cast<std::ptrdiff_t>(i) + 2)) n_ger++;
+                if (ts[i] == 0x4D && std::equal(i2, i2 + 3, ts.begin() + static_cast<std::ptrdiff_t>(i) + 2)) n_ita_event++;
+            }
+            check(n_ger >= 3 && n_ita_event == 0, "EIT events are in the language the programme guide says (de -> ger)");
+            check(iso639ForDvb("de") == "ger" && iso639ForDvb("nb") == "nob" && iso639ForDvb("eng") == "eng" &&
+                      iso639ForDvb("xx").empty() && iso639ForDvb("").empty(),
+                  "ISO 639-1 codes as the ISO 639-2 codes of DVB");
+        }
 
         // 2026-11-18 11:06:40 UTC is MJD 61362 (0xEFB2)
         check(buildTdtSection(1795000000) == std::vector<uint8_t>({0x70, 0x70, 0x05, 0xEF, 0xB2, 0x11, 0x06, 0x40}),

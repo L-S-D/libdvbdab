@@ -38,6 +38,9 @@ Service information
   of the service - "und" when the ensemble does not say it, where every
   event said "ger" before - and have the programme type as their content
   descriptor. A TDT (PID 0x14) with the time of the ensemble every 5 s.
+- The default language of a programme guide file is read: its events are
+  in that language in the EIT (WDR: "de", so "ger" as before, now from the
+  stream), before the language of the audio and "und".
 - TS: EIT present/following (table 0x4E) every 2 s for the services with a
   schedule, by the time of the ensemble. The SDT flags say which service
   has an EIT schedule and an EIT present/following; before, every service
@@ -84,7 +87,8 @@ Build
 - The sections of PAT, PMT, SDT and EIT are built in `output/ts_tables.hpp`
   (`TsService` and the PID constants moved there; `ts_muxer.hpp` includes
   it).
-- The SPI parser logs what it skips (level debug).
+- The SPI parser logs what it skips (level debug); every MOT object of a
+  data service is named once in the log (level debug).
 
 ## 2.4.0
 

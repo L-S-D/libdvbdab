@@ -347,9 +347,18 @@ bool EhbParser::parseEtsiFormat(const std::string& /*filename*/, const uint8_t* 
                 parseStringTable(elem_data, elem_data_len, dummy);
                 break;
             }
-            case TAG_DEFAULT_LANGUAGE:
-                // Skip for now
+            case TAG_DEFAULT_LANGUAGE: {
+                // the language of the texts of this file, as two or three
+                // letters (ISO 639), e.g. "de"
+                std::string lang(reinterpret_cast<const char*>(elem_data), elem_data_len);
+                bool letters = lang.size() == 2 || lang.size() == 3;
+                for (char& c : lang) {
+                    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+                    if (c < 'a' || c > 'z') letters = false;
+                }
+                if (letters) last_schedule_.language = lang;
                 break;
+            }
             case TAG_SCHEDULE:
                 parseScheduleElement(elem_data, elem_data_len);
                 break;
