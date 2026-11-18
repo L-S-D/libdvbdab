@@ -216,6 +216,11 @@ void DabPlusDecoder::finishSuperframe() {
 }
 
 bool DabPlusDecoder::feedFrame(const uint8_t* data, size_t len, int64_t frame_no) {
+    // A DAB+ subchannel is a multiple of 8 kbit/s: 24 bytes per frame each
+    if (len < 24 || len % 24 != 0) {
+        return false;
+    }
+
     // Auto-detect frame size from first call
     if (frame_size_ == 0) {
         frame_size_ = len;
