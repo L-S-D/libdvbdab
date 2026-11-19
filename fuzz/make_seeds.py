@@ -227,6 +227,19 @@ def mot_seeds():
     # TLV as TS 102 371: an EPG element with a token table and a string
     ehb = bytes([0x02, 0x10, 0x04, 0x06, 0x01, 0x04]) + b"News" + bytes([0x1C, 0x06, 0x01]) + b" at 9"
     write("mot_epg", "ehb.seed", bytes([1]) + ehb)
+    # the service information of a guide: an ensemble with a service, its
+    # bearer and a logo; and the first bytes of a PNG and of a JPEG
+    def el(tag, content):
+        return bytes([tag, len(content)]) + content
+    mm = el(0x82, b"1234-logo.png") + el(0x83, bytes([2])) + el(0x84, bytes([0, 128])) + el(0x85, bytes([0, 128]))
+    svc = el(0x29, el(0x80, bytes([0x40, 0xE0, 0x10, 0x01, 0x12, 0x34]))) + el(0x10, el(0x01, b"RADIO")) + \
+        el(0x13, el(0x2B, mm))
+    si = el(0x03, el(0x06, b"de") + el(0x26, el(0x80, bytes([0xE0, 0x10, 0x01])) + el(0x28, svc)))
+    write("mot_epg", "si.seed", bytes([1]) + si)
+    png = b"\x89PNG\r\n\x1a\n" + bytes([0, 0, 0, 13]) + b"IHDR" + bytes([0, 0, 0, 32, 0, 0, 0, 32, 8, 2, 0, 0, 0])
+    write("mot_epg", "png.seed", bytes([1]) + png)
+    jpg = bytes([0xFF, 0xD8, 0xFF, 0xE0, 0, 4, 0, 0, 0xFF, 0xC0, 0, 11, 8, 0, 128, 0, 128, 1, 1, 0x11, 0])
+    write("mot_epg", "jpeg.seed", bytes([1]) + jpg)
 
 
 # ---- TS for the ETI-NA and TS NI inputs and the scanner ----
