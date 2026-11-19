@@ -200,7 +200,9 @@ typedef enum {
 /* the streamer has dvbdab_streamer_set_wanted_pids() (2.2.0 on) */
 #define DVBDAB_HAVE_WANTED_PIDS 1
 /* the TS has the dynamic label of each service as RDS RadioText (stream type
- * 0x89, UECP; PID 0x1100 + subchannel ID) (2.3.0 on) */
+ * 0x89, UECP; PID 0x1100 + subchannel ID) (2.3.0 on); a label of more than
+ * 64 characters in RadioTexts that take turns, and the whole label in a
+ * manufacturer's specific command, MEC 0x2D "dl" (2.7.0 on) */
 #define DVBDAB_HAVE_RDS 1
 /* the library has no MPE, GSE and BBFrame input (2.0.0 on) */
 /* language and programme type of the services, country and LTO of the
@@ -219,7 +221,7 @@ typedef enum {
  * by their CRC, also of DAB, put out as RDS RadioText (2.3.0 on); the TS
  * with a PCR per service ahead of the PTS, PES by time, an SDT in sections
  * (2.4.0 on) */
-#define DVBDAB_VERSION_MINOR 6
+#define DVBDAB_VERSION_MINOR 7
 #define DVBDAB_VERSION_PATCH 0
 
 /* The version of the library that is linked, to compare with the macros

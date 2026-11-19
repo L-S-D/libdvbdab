@@ -3,7 +3,7 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
-## Not yet released
+## 2.7.0
 
 TS output
 - A dynamic label of more than 64 characters is no longer cut: it goes out
