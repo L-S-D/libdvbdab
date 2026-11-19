@@ -1,6 +1,6 @@
 // DAB+ Audio Decoder - ported from eti-tools ni2out.c
 // Original Copyright (C) 2008 David Crawley (OpenDAB)
-// License: GPLv3
+// SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "dabplus_decoder.hpp"
 #include "pad_decoder.hpp"

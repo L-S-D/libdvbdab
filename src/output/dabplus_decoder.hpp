@@ -1,6 +1,7 @@
 #pragma once
 // DAB+ Audio Decoder - ported from eti-tools ni2out.c
 // Original Copyright (C) 2008 David Crawley (OpenDAB)
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Extracts AAC audio units from DAB+ subchannel data
 
 #include <cstdint>

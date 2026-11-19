@@ -3,7 +3,12 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
-## Not yet released
+## 2.5.0
+
+Licence
+- The library is under the GNU General Public License, version 3 or later
+  (the DAB+ superframe decoder comes from OpenDAB, which is). Versions up to
+  2.4.0 were published under the MIT License.
 
 Input
 - EDI: a sender that starts anew (its sequence numbers begin again) is

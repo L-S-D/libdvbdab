@@ -216,7 +216,7 @@ typedef enum {
  * by their CRC, also of DAB, put out as RDS RadioText (2.3.0 on); the TS
  * with a PCR per service ahead of the PTS, PES by time, an SDT in sections
  * (2.4.0 on) */
-#define DVBDAB_VERSION_MINOR 4
+#define DVBDAB_VERSION_MINOR 5
 #define DVBDAB_VERSION_PATCH 0
 
 /* The version of the library that is linked, to compare with the macros

@@ -11,7 +11,7 @@ endif()
 
 project(libdvbdab LANGUAGES C CXX)
 
-# C++17 is what the library needs (it builds with GCC 9 and clang 10 on)
+# C++17 is what the library needs (built with GCC 10 to 15, clang 14 to 18)
 if(NOT DEFINED CMAKE_CXX_STANDARD)
     set(CMAKE_CXX_STANDARD 17)
 endif()
@@ -99,7 +99,7 @@ target_link_libraries(dvbdab pthread ZLIB::ZLIB ${PUGIXML_LIBRARIES})
 
 # DAB+ transcoding (DVBDAB_AAC_TRANSCODE): faad2 decodes the 960-sample AUs
 # with SBR/PS, libavcodec encodes AAC-LC; both found, it is built in. faad2 is
-# GPL: a library built with it is GPL as a whole.
+# GPL version 2 or later, which goes with the GPL of the library.
 # -DDVBDAB_TRANSCODE=AUTO (built in when both are found), ON (they must be
 # there) or OFF. Without it DAB+ comes out as it is (ADTS or LATM), and a
 # player that takes its frames of 960 samples for 1024 plays it too slow.

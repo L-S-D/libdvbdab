@@ -440,10 +440,21 @@ Deterministic PID allocation based on subchannel_id:
 
 ## License
 
-The source of the library is under the MIT License ([LICENSE](LICENSE)).
+Copyright (C) 2024-2026 L-S-D
 
-A library built with transcoding contains faad2, which is under the GPL
-(version 2 or later): that binary, and a program linked with it, can only be
-passed on under the GPL. libavcodec is LGPL 2.1 or later, or GPL, depending
-on how it was configured. `-DDVBDAB_TRANSCODE=OFF` builds a library without
-both.
+libdvbdab is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version ([LICENSE](LICENSE)). It comes without any warranty. A program linked
+with the library can only be passed on under the GPL as well.
+
+The DAB+ superframe decoder is ported from `ni2out.c` of eti-tools, which
+goes back to OpenDAB, Copyright (C) 2008 David Crawley, GPL version 3 or
+later.
+
+Versions up to 2.4.0 were published under the MIT License.
+
+A library built with transcoding contains faad2 (GPL version 2 or later) and
+uses libavcodec (LGPL 2.1 or later, or GPL, depending on how it was
+configured); both go with the licence of the library.
+`-DDVBDAB_TRANSCODE=OFF` builds a library without them.
