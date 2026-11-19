@@ -3,7 +3,7 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
-## Not yet released
+## 2.8.0
 
 TS output
 - The slideshow of a service (MOT in the X-PAD of its audio) goes out in
