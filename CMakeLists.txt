@@ -69,6 +69,7 @@ add_library(dvbdab STATIC
     src/parsers/packet_decoder.cpp
     src/parsers/spi_parser.cpp
     src/parsers/ehb_parser.cpp
+    src/parsers/spi_si_parser.cpp
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
@@ -196,6 +197,7 @@ add_executable(test_stream_processor
     src/parsers/udp_extractor.cpp
     src/parsers/packet_decoder.cpp
     src/parsers/ehb_parser.cpp
+    src/parsers/spi_si_parser.cpp
     src/parsers/pf_reassembler.cpp
     src/ensemble_manager.cpp
     src/dab_parser.cpp
@@ -358,7 +360,8 @@ endforeach()
 # ----------------------------------------------------------------------------
 if(NOT DVBDAB_FUZZ)
 
-foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits test_ensemble_changes)
+foreach(t test_edi_input test_dabplus_decoder test_pad_rds test_ts_output test_data_limits test_ensemble_changes
+          test_logos)
     add_executable(${t} tests/${t}.cpp)
     target_link_libraries(${t} dvbdab)
     add_test(NAME ${t} COMMAND ${t})

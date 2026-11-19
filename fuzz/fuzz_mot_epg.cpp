@@ -1,9 +1,11 @@
 // Fuzz harness: the bytes of a data subchannel into the packet mode and MOT
-// decoder (its files into the EHB parser, as the stream processor does), or
-// the input as an EHB file. The first byte chooses.
+// decoder (its files into the EHB parser, the service information parser
+// and the image check, as the stream processor does), or the input as such
+// a file. The first byte chooses.
 
 #include "../src/parsers/packet_decoder.hpp"
 #include "../src/parsers/ehb_parser.hpp"
+#include "../src/parsers/spi_si_parser.hpp"
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -20,14 +22,24 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     ehb.setScheduleCallback([](const ServiceSchedule& s) {
         for (const auto& e : s.events) (void)e.title.size();
     });
+    auto other = [](const uint8_t* file, size_t len) {
+        SpiServiceInfo si;
+        if (parseSpiServiceInformation(file, len, si)) {
+            for (const auto& l : si.logos) (void)l.url.size();
+        }
+        int w, h;
+        (void)imageFileInfo(file, len, w, h);
+    };
     if (mode & 1) {
         std::vector<uint8_t> file(data, data + size);
         ehb.parse("w20261118d1234.EHB", file.data(), file.size());
+        other(file.data(), file.size());
         return 0;
     }
     PacketDecoder dec;
     dec.setMotCallback([&](uint16_t, const MOTHeaderInfo& hdr, const uint8_t* file, size_t len) {
         ehb.parse(hdr.content_name, file, len);
+        other(file, len);
     });
     // in pieces of a subchannel frame (the size from the second byte)
     size_t piece = 24 * (1 + (mode >> 1) % 16);

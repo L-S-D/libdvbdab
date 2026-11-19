@@ -137,6 +137,94 @@ void DabStreamProcessor::addService(const TsService& service) {
     services_.push_back(svc);
     subch_to_sid_[svc.subchannel_id] = svc.sid;
     muxer_.addService(svc);
+    // its logos, when they came before it
+    std::set<std::string> urls;
+    for (const auto& r : logo_refs_) {
+        if (r.second.sid == svc.sid) urls.insert(r.first);
+    }
+    for (const auto& url : urls) tellLogos(url);
+}
+
+static uint32_t fnv1a(const uint8_t* data, size_t len) {
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < len; i++) h = (h ^ data[i]) * 16777619u;
+    return h;
+}
+
+// An image object of the carousel: kept (the service information that names
+// it may come later), and told for the services it is a logo of
+void DabStreamProcessor::onLogoImage(const std::string& name, const uint8_t* data, size_t len) {
+    int w = 0, h = 0;
+    if (!logo_callback_ || name.empty() || len > MAX_LOGO_FILE || !imageFileInfo(data, len, w, h)) return;
+    uint32_t hash = fnv1a(data, len);
+    auto it = logo_objects_.find(name);
+    if (it != logo_objects_.end()) {
+        if (it->second.hash == hash && it->second.data.size() == len) return;   // the carousel came round
+        logo_bytes_ -= it->second.data.size();
+        logo_objects_.erase(it);
+    }
+    if (logo_objects_.size() >= MAX_LOGO_OBJECTS || logo_bytes_ + len > MAX_LOGO_BYTES) return;
+    logo_objects_[name] = LogoObject{std::vector<uint8_t>(data, data + len), hash};
+    logo_bytes_ += len;
+    tellLogos(name);
+}
+
+// The service information of the programme guide: which image is a logo of
+// which service
+void DabStreamProcessor::onServiceInformation(const uint8_t* data, size_t len) {
+    if (!logo_callback_) return;
+    uint32_t hash = fnv1a(data, len);
+    if (si_seen_ && hash == si_hash_) return;
+    SpiServiceInfo si;
+    if (!parseSpiServiceInformation(data, len, si)) return;
+    si_seen_ = true;
+    si_hash_ = hash;
+    logo_refs_.clear();
+    std::set<std::string> urls;
+    for (const auto& l : si.logos) {
+        if (l.sid > 0xFFFF) continue;   // a data service: none of the TS
+        logo_refs_.emplace(l.url, l);
+        urls.insert(l.url);
+    }
+    LOG_DEBUG(MOT, "service information: " << si.logos.size() << " logos of services");
+    for (const auto& url : urls) tellLogos(url);
+}
+
+// The image `url` to the services it is a logo of, when it is there and
+// was not told to them as it is now
+void DabStreamProcessor::tellLogos(const std::string& url) {
+    auto obj = logo_objects_.find(url);
+    if (obj == logo_objects_.end() || !logo_callback_) return;
+    auto range = logo_refs_.equal_range(url);
+    for (auto r = range.first; r != range.second; ++r) {
+        uint16_t sid = static_cast<uint16_t>(r->second.sid);
+        bool ours = false;
+        for (const auto& s : services_) ours = ours || s.sid == sid;
+        if (!ours) continue;
+        auto key = std::make_pair(sid, url);
+        auto told = logos_told_.find(key);
+        if (told != logos_told_.end() && told->second == obj->second.hash) continue;
+        if (logos_told_.size() >= 8192) logos_told_.clear();
+        logos_told_[key] = obj->second.hash;
+        ServiceLogo logo{};
+        logo.sid = sid;
+        logo.data = obj->second.data.data();
+        logo.len = obj->second.data.size();
+        logo.mime_type = imageFileInfo(logo.data, logo.len, logo.width, logo.height);
+        if (!logo.width || !logo.height) {
+            // not from the image: as the service information says it, or
+            // the size its type of logo has
+            logo.width = r->second.width;
+            logo.height = r->second.height;
+            if ((!logo.width || !logo.height) && (r->second.type == 4 || r->second.type == 6)) {
+                logo.width = r->second.type == 4 ? 32 : 112;
+                logo.height = 32;
+            }
+        }
+        LOG_DEBUG(MOT, "logo of service 0x" << std::hex << sid << std::dec << ": \"" << url << "\", "
+                  << logo.width << "x" << logo.height << ", " << logo.len << " bytes");
+        logo_callback_(logo);
+    }
 }
 
 void DabStreamProcessor::removeService(uint16_t sid) {
@@ -358,6 +446,36 @@ void DabStreamProcessor::updateServiceInfo(uint16_t sid, const std::string& lang
     muxer_.updateServiceInfo(sid, language, content);
 }
 
+// A complete object of the MOT carousel of a data service: the files of
+// the programme guide (SPI) - schedules (.EHB), its service information and
+// the images that names
+void DabStreamProcessor::onMotObject(uint16_t tid, const MOTHeaderInfo& hdr, const uint8_t* file_data,
+                                     size_t file_len) {
+    // every object once (by its transport id), to see what a data service carries
+    if (mot_objects_seen_.size() < 4096 && mot_objects_seen_.insert(tid).second) {
+        LOG_DEBUG(MOT, "object 0x" << std::hex << tid << std::dec << ": \"" << hdr.content_name
+                  << "\", content type " << static_cast<int>(hdr.content_type) << "/"
+                  << static_cast<int>(hdr.content_subtype) << ", " << file_len << " bytes"
+                  << (file_len >= 2 && file_data[0] == 0x1F && file_data[1] == 0x8B ? " (gzip)" : ""));
+    }
+    // of the programme guide (SPI): its service information
+    // (content type 7/0) and the images it names (type 2)
+    if (hdr.content_type == 7 && hdr.content_subtype == 0) onServiceInformation(file_data, file_len);
+    else if (hdr.content_type == 2) onLogoImage(hdr.content_name, file_data, file_len);
+    if (hdr.content_name.find(".EHB") != std::string::npos) {
+        // again only when it is another file: a transport id
+        // comes again with new content (the counter wraps)
+        uint32_t h = 2166136261u;
+        for (unsigned char ch : hdr.content_name) h = (h ^ ch) * 16777619u;
+        for (size_t i = 0; i < file_len; i++) h = (h ^ file_data[i]) * 16777619u;
+        auto seen = processed_files_.find(tid);
+        if (seen == processed_files_.end() || seen->second != h) {
+            processed_files_[tid] = h;
+            ehb_parser_.parse(hdr.content_name, file_data, file_len);
+        }
+    }
+}
+
 void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len) {
     feedEtiFrame(eti_ni, len, 0);
 }
@@ -446,29 +564,8 @@ void DabStreamProcessor::feedEtiFrame(const uint8_t* eti_ni, size_t len, uint64_
         if (epg_decoders_.size() < MAX_DATA_SUBCHANNELS && data_subchannels_.insert(scid).second) {
             auto decoder = std::make_unique<PacketDecoder>();
 
-            // Wire to EHB parser for EPG files
-            decoder->setMotCallback([this](uint16_t tid,
-                    const MOTHeaderInfo& hdr, const uint8_t* file_data, size_t file_len) {
-                // every object once (by its transport id), to see what a data service carries
-                if (mot_objects_seen_.size() < 4096 && mot_objects_seen_.insert(tid).second) {
-                    LOG_DEBUG(MOT, "object 0x" << std::hex << tid << std::dec << ": \"" << hdr.content_name
-                              << "\", content type " << static_cast<int>(hdr.content_type) << "/"
-                              << static_cast<int>(hdr.content_subtype) << ", " << file_len << " bytes"
-                              << (file_len >= 2 && file_data[0] == 0x1F && file_data[1] == 0x8B ? " (gzip)" : ""));
-                }
-                if (hdr.content_name.find(".EHB") != std::string::npos) {
-                    // again only when it is another file: a transport id
-                    // comes again with new content (the counter wraps)
-                    uint32_t h = 2166136261u;
-                    for (unsigned char ch : hdr.content_name) h = (h ^ ch) * 16777619u;
-                    for (size_t i = 0; i < file_len; i++) h = (h ^ file_data[i]) * 16777619u;
-                    auto seen = processed_files_.find(tid);
-                    if (seen == processed_files_.end() || seen->second != h) {
-                        processed_files_[tid] = h;
-                        ehb_parser_.parse(hdr.content_name, file_data, file_len);
-                    }
-                }
-            });
+            decoder->setMotCallback([this](uint16_t tid, const MOTHeaderInfo& hdr, const uint8_t* file_data,
+                                           size_t file_len) { onMotObject(tid, hdr, file_data, file_len); });
 
             epg_decoders_[scid] = std::move(decoder);
         }

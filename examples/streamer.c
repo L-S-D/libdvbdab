@@ -28,6 +28,14 @@ static void log_line(int level, const char *tag, const char *message)
     }
 }
 
+/* a logo of a service, from the programme guide of the ensemble */
+static void on_logo(void *opaque, const dvbdab_logo_t *logo)
+{
+    (void)opaque;
+    fprintf(stderr, "logo of service 0x%04x: %s, %dx%d, %zu bytes\n", (unsigned)logo->sid, logo->mime_type,
+            logo->width, logo->height, logo->len);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 3 && argc != 6) {
@@ -61,6 +69,7 @@ int main(int argc, char **argv)
         return 1;
     }
     dvbdab_streamer_set_output(streamer, ts_out, stdout);
+    dvbdab_streamer_set_logo_callback(streamer, on_logo, NULL);
 
     uint8_t buf[188 * 64];
     size_t n;

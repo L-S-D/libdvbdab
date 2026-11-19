@@ -3,7 +3,14 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
-## Not yet released
+## 2.6.0
+
+C API
+- `dvbdab_streamer_set_logo_callback()` (`DVBDAB_HAVE_LOGOS`): the logos of
+  the services, from the programme guide of the ensemble. Its service
+  information file says which image of the carousel is a logo of which
+  service; each logo is told once, with its type and size, and again when
+  its image changed.
 
 TS output
 - The PMT of a DAB+ service has an AAC_descriptor (profile and level, mono

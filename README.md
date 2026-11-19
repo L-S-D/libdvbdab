@@ -96,9 +96,13 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
   - The programme information files of the binary SPI/EPG (ETSI TS 102 371,
     `.EHB` in a MOT carousel): schedules with title, description, and the
     language they are in
-  - Not used: the service information file (`.EIB`), station logos and
-    other MOT objects of the carousel (the log names them at level debug);
-    the XML form of SPI (there is a parser for it, nothing feeds it)
+  - Station logos: the service information file of the guide names the
+    images of the carousel that are logos of the services (several sizes
+    per service, PNG or JPEG); a callback gets each of them, see
+    [Logos](#logos). A TS has no place for them.
+  - Not used: other MOT objects of the carousel (the log names them at
+    level debug); the XML form of SPI (there is a parser for it, nothing
+    feeds it)
 
 - **C API** for easy integration with C applications
 
@@ -280,6 +284,17 @@ is put out as. Both take the size of the caller's structure, so a program
 built with an older header keeps working. [examples/streamer.c](examples/streamer.c)
 prints them.
 
+### Logos
+
+`dvbdab_streamer_set_logo_callback()` sets a function that gets the logos of
+the services: the image file as it was sent, its type (`image/png` or
+`image/jpeg`), its size in pixels and the service it belongs to. A service
+usually has several logos of different sizes (32x32, 112x32, 128x128,
+320x240, 600x600); each is told once, and again when its image changed. They
+come with the programme guide of the ensemble, whose carousel takes minutes
+to come round, and only from ensembles that send one. The callback runs
+inside `dvbdab_streamer_feed()`. Without a callback the images are not kept.
+
 ### Versions
 
 `dvbdab_c.h` has the version it describes (`DVBDAB_VERSION_MAJOR`, `_MINOR`,
@@ -297,6 +312,7 @@ asked at compile time:
 | `DVBDAB_LABEL_SIZE` | 2.5.0 | labels of 65 bytes (17 before), `dvbdab_version()` |
 | `DVBDAB_HAVE_STATS` | 2.5.0 | `dvbdab_streamer_get_stats()`, `dvbdab_streamer_get_service_stats()` |
 | `DVBDAB_HAVE_SERVICE_INFO` | 2.5.0 | language and programme type of a service, country and LTO of the ensemble, `dvbdab_streamer_get_time()` |
+| `DVBDAB_HAVE_LOGOS` | 2.6.0 | `dvbdab_streamer_set_logo_callback()` |
 
 [CHANGELOG.md](CHANGELOG.md) has what each version changed.
 

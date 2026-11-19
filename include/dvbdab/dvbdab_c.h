@@ -209,6 +209,9 @@ typedef enum {
 #define DVBDAB_HAVE_SERVICE_INFO 1
 /* dvbdab_streamer_get_stats(), dvbdab_streamer_get_service_stats() (2.5.0 on) */
 #define DVBDAB_HAVE_STATS 1
+/* dvbdab_streamer_set_logo_callback(): the logos of the services from the
+ * programme guide of the ensemble (2.6.0 on) */
+#define DVBDAB_HAVE_LOGOS 1
 #define DVBDAB_VERSION_MAJOR 2
 /* lost frames: DAB+ AUs of incomplete superframes, PTS with the gaps,
  * subchannels of EDI packets with lost fragments (2.1.0 on); the DAB+ output
@@ -216,7 +219,7 @@ typedef enum {
  * by their CRC, also of DAB, put out as RDS RadioText (2.3.0 on); the TS
  * with a PCR per service ahead of the PTS, PES by time, an SDT in sections
  * (2.4.0 on) */
-#define DVBDAB_VERSION_MINOR 5
+#define DVBDAB_VERSION_MINOR 6
 #define DVBDAB_VERSION_PATCH 0
 
 /* The version of the library that is linked, to compare with the macros
@@ -395,6 +398,35 @@ typedef struct {
  * @return         0 on success, -1 on error
  */
 int dvbdab_streamer_get_stats(dvbdab_streamer_t *streamer, dvbdab_stats_t *stats, size_t size);
+
+/*
+ * Logos (DVBDAB_HAVE_LOGOS, 2.6.0 on). An ensemble with a programme guide
+ * (SPI, ETSI TS 102 818) can send logos of its services with it: image
+ * files in the carousel of the guide, which its service information gives
+ * to the services. A service usually has several, of different sizes
+ * (32x32, 112x32, 128x128, 320x240, 600x600). A carousel takes minutes to
+ * come round.
+ */
+typedef struct {
+    uint32_t sid;           /* the service */
+    const char *mime_type;  /* "image/png" or "image/jpeg" */
+    int width, height;      /* pixels; 0 = not known */
+    const uint8_t *data;    /* the image file as it was sent; valid during the call */
+    size_t len;
+} dvbdab_logo_t;
+
+typedef void (*dvbdab_logo_cb)(void *opaque, const dvbdab_logo_t *logo);
+
+/**
+ * Set the callback for the logos of the services. Each logo of each service
+ * is told once, and again when its image changed. Called from
+ * dvbdab_streamer_feed(). Without a callback the images are not kept: set
+ * it before feeding.
+ * @param streamer Streamer handle
+ * @param callback Function to call with a logo, or NULL for none
+ * @param opaque   User data passed to callback
+ */
+void dvbdab_streamer_set_logo_callback(dvbdab_streamer_t *streamer, dvbdab_logo_cb callback, void *opaque);
 
 /**
  * Statistics of one service of a streamer.

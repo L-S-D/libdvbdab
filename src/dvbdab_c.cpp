@@ -335,6 +335,10 @@ struct dvbdab_streamer {
     bool wanted_all{true};
     std::vector<uint16_t> wanted_pids;
 
+    // Logos of the services (dvbdab_streamer_set_logo_callback)
+    dvbdab_logo_cb logo_cb{nullptr};
+    void* logo_opaque{nullptr};
+
     // Debug counters (per-streamer)
     int ts_output_count{0};
     size_t ts_output_bytes{0};
@@ -708,6 +712,35 @@ void dvbdab_streamer_destroy(dvbdab_streamer_t *streamer)
     delete streamer;
 }
 
+// the logos of the processor go to the callback of the user, when there is one
+static void set_processor_logo_callback(dvbdab_streamer* s) {
+    if (!s->processor) return;
+    if (!s->logo_cb) {
+        s->processor->setLogoCallback(nullptr);
+        return;
+    }
+    s->processor->setLogoCallback([s](const DabStreamProcessor::ServiceLogo& l) {
+        if (!s->logo_cb) return;
+        dvbdab_logo_t logo;
+        memset(&logo, 0, sizeof(logo));
+        logo.sid = l.sid;
+        logo.mime_type = l.mime_type;
+        logo.width = l.width;
+        logo.height = l.height;
+        logo.data = l.data;
+        logo.len = l.len;
+        s->logo_cb(s->logo_opaque, &logo);
+    });
+}
+
+void dvbdab_streamer_set_logo_callback(dvbdab_streamer_t *streamer, dvbdab_logo_cb callback, void *opaque)
+{
+    if (!streamer) return;
+    streamer->logo_cb = callback;
+    streamer->logo_opaque = opaque;
+    set_processor_logo_callback(streamer);
+}
+
 void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
                                  dvbdab_ts_output_cb callback, void *opaque)
 {
@@ -730,6 +763,7 @@ void dvbdab_streamer_set_output(dvbdab_streamer_t *streamer,
                     streamer->output_cb(streamer->output_opaque, data, len);
                 }
             });
+            set_processor_logo_callback(streamer);
             // an ensemble that was ready before there was an output: set up now
             if (streamer->basic_ready) {
                 setup_processor_from_ensemble(streamer, streamer->cached_ensemble);

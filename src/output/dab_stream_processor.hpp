@@ -8,6 +8,7 @@
 #include "dab_mp2_decoder.hpp"
 #include "../parsers/packet_decoder.hpp"
 #include "../parsers/ehb_parser.hpp"
+#include "../parsers/spi_si_parser.hpp"
 #include <dvbdab/dvbdab.hpp>
 #include <map>
 #include <set>
@@ -111,6 +112,24 @@ public:
     };
     /// false when no service has this subchannel
     bool getServiceStats(uint8_t subchannel_id, ServiceStats& stats) const;
+
+    /// A logo of a service: an image file (PNG or JPEG) from the carousel of
+    /// the programme guide, which its service information gives to the service
+    struct ServiceLogo {
+        uint16_t sid;
+        const char* mime_type;   ///< "image/png" or "image/jpeg"
+        int width, height;       ///< pixels, as the image says (else as the service information says); 0 = not known
+        const uint8_t* data;
+        size_t len;
+    };
+    /// Each logo of each service is told once, and again when its image
+    /// changed (a service has logos of several sizes). Without a callback
+    /// the images of the carousel are not kept.
+    void setLogoCallback(std::function<void(const ServiceLogo&)> cb) { logo_callback_ = std::move(cb); }
+
+    /// A complete object of the MOT carousel of a data service (what the
+    /// packet decoders of the data subchannels call; public for tests)
+    void onMotObject(uint16_t transport_id, const MOTHeaderInfo& header, const uint8_t* data, size_t len);
     size_t getAudioFrameCount() const { return audio_frame_count_; }
     size_t getEpgScheduleCount() const { return epg_schedule_count_; }
     size_t getTsPacketCount() const { return muxer_.getPacketCount(); }
@@ -165,6 +184,27 @@ private:
     int last_fct_{-1};
     int64_t frame_no_{0};
     std::map<uint8_t, int64_t> mp2_last_frame_;
+
+    // Logos: the image objects of the carousel by their ContentName, what
+    // the service information says (by the url of the image), and what was
+    // told (service and url: the hash of the image)
+    struct LogoObject {
+        std::vector<uint8_t> data;
+        uint32_t hash;
+    };
+    static constexpr size_t MAX_LOGO_OBJECTS = 512;
+    static constexpr size_t MAX_LOGO_FILE = 1024 * 1024;
+    static constexpr size_t MAX_LOGO_BYTES = 16 * 1024 * 1024;
+    std::map<std::string, LogoObject> logo_objects_;
+    size_t logo_bytes_{0};
+    std::multimap<std::string, SpiLogo> logo_refs_;
+    bool si_seen_{false};
+    uint32_t si_hash_{0};
+    std::map<std::pair<uint16_t, std::string>, uint32_t> logos_told_;
+    std::function<void(const ServiceLogo&)> logo_callback_;
+    void onLogoImage(const std::string& name, const uint8_t* data, size_t len);
+    void onServiceInformation(const uint8_t* data, size_t len);
+    void tellLogos(const std::string& url);
 
     // External schedule callback
     std::function<void(const ServiceSchedule&)> external_schedule_callback_;
