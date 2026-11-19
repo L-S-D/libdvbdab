@@ -130,6 +130,24 @@ std::vector<uint8_t> uecpLabelFrame(const std::string& utf8) {
     return uecpFrame(msg);
 }
 
+std::vector<std::vector<uint8_t>> uecpSlideFrames(uint8_t slide, const uint8_t* data, size_t len) {
+    std::vector<std::vector<uint8_t>> frames;
+    if (!data || len == 0 || len > UECP_SLIDE_MAX) return frames;
+    size_t pieces = (len + UECP_SLIDE_PIECE - 1) / UECP_SLIDE_PIECE;
+    for (size_t p = 0; p < pieces; p++) {
+        size_t from = p * UECP_SLIDE_PIECE;
+        size_t n = len - from < UECP_SLIDE_PIECE ? len - from : UECP_SLIDE_PIECE;
+        // message element: MEC, message element length, the designation, the
+        // command (0x02: a piece of a slide), slide, piece, pieces, the bytes
+        std::vector<uint8_t> msg = {MEC_MANUFACTURER, static_cast<uint8_t>(8 + n), 'd', 'l', 0x02, slide,
+                                    static_cast<uint8_t>(p >> 8), static_cast<uint8_t>(p),
+                                    static_cast<uint8_t>(pieces >> 8), static_cast<uint8_t>(pieces)};
+        msg.insert(msg.end(), data + from, data + from + n);
+        frames.push_back(uecpFrame(msg));
+    }
+    return frames;
+}
+
 std::vector<RtPlusTag> rtPlusTags(const RdsText& mapped,
                                   const std::vector<std::array<uint8_t, 3>>& dl_plus_tags) {
     std::vector<RtPlusTag> out;

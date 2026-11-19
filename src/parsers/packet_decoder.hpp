@@ -102,6 +102,10 @@ public:
     // Feed subchannel data (one frame of packet-mode subchannel)
     void feedSubchannelData(const uint8_t* data, size_t len);
 
+    // A complete MSC data group that came another way (the X-PAD of an
+    // audio service): its MOT objects go to the same callbacks
+    void feedDataGroup(const uint8_t* data, size_t len) { processDataGroup(0, data, len); }
+
     // Statistics
     size_t getPacketCount() const { return packet_count_; }
     size_t getDataGroupCount() const { return dg_count_; }

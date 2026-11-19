@@ -77,6 +77,10 @@ void DabMp2Decoder::setDLSCallback(std::function<void(const std::string& text)> 
     pad_->setDLSCallback(std::move(cb));
 }
 
+void DabMp2Decoder::setMotDataGroupCallback(std::function<void(const uint8_t* data, size_t len)> cb) {
+    pad_->setMotDataGroupCallback(std::move(cb));
+}
+
 void DabMp2Decoder::setDLPlusCallback(
     std::function<void(const std::string& text, const std::vector<DLPlusTag>& tags)> cb) {
     pad_->setDLPlusCallback(std::move(cb));

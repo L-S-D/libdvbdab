@@ -337,6 +337,9 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
                 onDLPlus(subchannel_id, text, tags);
             });
 
+            attachSlides(subchannel_id, [dec](std::function<void(const uint8_t*, size_t)> cb) {
+                dec->setMotDataGroupCallback(std::move(cb));
+            });
             dabplus_decoders_[subchannel_id] = std::move(decoder);
         }
     } else {
@@ -364,6 +367,10 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
                 onDLPlus(subchannel_id, text, tags);
             });
 
+            DabMp2Decoder* mdec = decoder.get();
+            attachSlides(subchannel_id, [mdec](std::function<void(const uint8_t*, size_t)> cb) {
+                mdec->setMotDataGroupCallback(std::move(cb));
+            });
             mp2_decoders_[subchannel_id] = std::move(decoder);
         }
     }
@@ -405,11 +412,52 @@ void DabStreamProcessor::onDLPlus(uint8_t subchannel_id, const std::string& text
                             !tags.empty() && tags[0].item_running);
 }
 
+// The slideshow of an audio service: the MOT data groups of its X-PAD go
+// through a MOT decoder of their own
+void DabStreamProcessor::attachSlides(uint8_t subchannel_id,
+                                      const std::function<void(std::function<void(const uint8_t*, size_t)>)>& set) {
+    // (the slides go into the RDS stream of the service: without one, and
+    // without a callback, their data groups are not collected)
+    bool rds = false;
+    for (const auto& svc : services_) rds = rds || (svc.subchannel_id == subchannel_id && svc.rds_pid);
+    if (!rds && !slide_callback_) return;
+    auto mot = std::make_unique<PacketDecoder>();
+    mot->setMotCallback([this, subchannel_id](uint16_t tid, const MOTHeaderInfo& hdr, const uint8_t* data, size_t len) {
+        onSlide(subchannel_id, tid, hdr, data, len);
+    });
+    PacketDecoder* m = mot.get();
+    set([m](const uint8_t* data, size_t len) { m->feedDataGroup(data, len); });
+    slide_decoders_[subchannel_id] = std::move(mot);
+}
+
+void DabStreamProcessor::onSlide(uint8_t subchannel_id, uint16_t tid, const MOTHeaderInfo& hdr, const uint8_t* data,
+                                 size_t len) {
+    auto it = subch_to_sid_.find(subchannel_id);
+    if (it == subch_to_sid_.end()) return;
+    ServiceSlide slide{};
+    slide.sid = it->second;
+    slide.name = hdr.content_name.c_str();
+    slide.data = data;
+    slide.len = len;
+    slide.mime_type = imageFileInfo(data, len, slide.width, slide.height);
+    if (!slide.mime_type) return;   // a slide is a JPEG or PNG (TS 101 499)
+    LOG_DEBUG(MOT, "slide of service 0x" << std::hex << it->second << " (object 0x" << tid << std::dec << "): \""
+              << hdr.content_name << "\", " << slide.mime_type << " " << slide.width << "x" << slide.height << ", "
+              << len << " bytes");
+    // into the RDS stream of the service, when someone takes the service
+    for (const auto& svc : services_) {
+        if (svc.sid != it->second || !svc.rds_pid) continue;
+        if (wanted_all_ || isWanted(svc) || wanted_pids_.count(svc.rds_pid)) muxer_.setSlide(svc.sid, data, len);
+    }
+    if (slide_callback_) slide_callback_(slide);
+}
+
 void DabStreamProcessor::stopService(uint8_t subchannel_id) {
     dabplus_decoders_.erase(subchannel_id);
     transcoders_.erase(subchannel_id);
     aac_said_.erase(subchannel_id);
     mp2_decoders_.erase(subchannel_id);
+    slide_decoders_.erase(subchannel_id);
     mp2_last_frame_.erase(subchannel_id);
     auto it = subch_to_sid_.find(subchannel_id);
     if (it != subch_to_sid_.end()) muxer_.dropAudio(it->second);

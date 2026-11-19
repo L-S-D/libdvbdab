@@ -6,10 +6,12 @@
 #include "../src/output/charsets.hpp"
 #include "../src/output/rds_uecp.hpp"
 #include "../src/output/ts_muxer.hpp"
+#include "../src/parsers/packet_decoder.hpp"
 #include "../src/utils/crc_utils.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -392,6 +394,166 @@ int main() {
         size_t labels = 0;
         for (auto it = rds.begin(); (it = std::search(it, rds.end(), text.begin(), text.end())) != rds.end(); ++it) labels++;
         check(labels >= 6, "and the whole label goes with every one of them");
+    }
+
+    {
+        // the slideshow: MOT data groups in the X-PAD, through a MOT decoder
+        // an MSC data group with CRC, segment field and transport id: type 3
+        // (MOT header) or 4 (body); its data begins with the segmentation header
+        auto mot_dg = [](uint8_t type, uint16_t seg, bool last, uint16_t tid, const Bytes& data) {
+            Bytes dg = {static_cast<uint8_t>(0x70 | type), 0x00, static_cast<uint8_t>((last ? 0x80 : 0) | seg >> 8),
+                        static_cast<uint8_t>(seg), 0x12, static_cast<uint8_t>(tid >> 8), static_cast<uint8_t>(tid),
+                        static_cast<uint8_t>(data.size() >> 8), static_cast<uint8_t>(data.size())};
+            dg.insert(dg.end(), data.begin(), data.end());
+            uint16_t crc = crc16_ccitt_xor(dg.data(), dg.size());
+            dg.push_back(static_cast<uint8_t>(crc >> 8));
+            dg.push_back(static_cast<uint8_t>(crc));
+            return dg;
+        };
+        // the frames of the X-PAD for a data group: its length (application
+        // type 1, when with_length) and its start (12, 48 bytes) in the
+        // first, continuations (13) in the others
+        auto feed_mot = [](PadDecoder& pad, const Bytes& dg, bool with_length = true, size_t stop_after = 1000) {
+            const uint8_t fpad[2] = {0x20, 0x02};
+            for (size_t at = 0, n = 0; at < dg.size() && n < stop_after; at += 48, n++) {
+                Bytes x;
+                if (at == 0 && with_length) {
+                    x = {static_cast<uint8_t>(0 << 5 | 1), static_cast<uint8_t>(7 << 5 | 12), 0x00,
+                         static_cast<uint8_t>(dg.size() >> 8), static_cast<uint8_t>(dg.size())};
+                    uint16_t crc = crc16_ccitt_xor(x.data() + 3, 2);
+                    x.push_back(static_cast<uint8_t>(crc >> 8));
+                    x.push_back(static_cast<uint8_t>(crc));
+                } else {
+                    x = {static_cast<uint8_t>(7 << 5 | (at == 0 ? 12 : 13)), 0x00};
+                }
+                size_t head = x.size();
+                x.insert(x.end(), dg.begin() + static_cast<std::ptrdiff_t>(at),
+                         dg.begin() + static_cast<std::ptrdiff_t>(std::min(at + 48, dg.size())));
+                x.resize(head + 48, 0);
+                Bytes room(x.rbegin(), x.rend());
+                pad.process(room.data(), room.size(), fpad);
+            }
+        };
+        Bytes image = {0xFF, 0xD8, 0xFF, 0xE0};
+        for (int i = 0; i < 296; i++) image.push_back(static_cast<uint8_t>(i * 7 + (i % 5 == 0 ? 0xF0 : 0)));
+        const std::string file = "slide.jpg";
+        // MOT header: body size, header size, content type 2 (image), subtype 1 (JFIF), the ContentName
+        size_t hs = 7 + 3 + file.size();
+        Bytes header = {static_cast<uint8_t>(image.size() >> 20), static_cast<uint8_t>(image.size() >> 12),
+                        static_cast<uint8_t>(image.size() >> 4),
+                        static_cast<uint8_t>((image.size() & 0x0F) << 4 | ((hs >> 9) & 0x0F)),
+                        static_cast<uint8_t>(hs >> 1), static_cast<uint8_t>((hs & 1) << 7 | 2 << 1), 0x01,
+                        0xCC, static_cast<uint8_t>(1 + file.size()), 0x00};
+        header.insert(header.end(), file.begin(), file.end());
+
+        PadDecoder pad;
+        PacketDecoder mot;
+        std::vector<Bytes> objects;
+        std::string name;
+        size_t groups = 0;
+        mot.setMotCallback([&](uint16_t, const MOTHeaderInfo& h, const uint8_t* d, size_t n) {
+            objects.emplace_back(d, d + n);
+            name = h.content_name;
+        });
+        pad.setMotDataGroupCallback([&](const uint8_t* d, size_t n) {
+            groups++;
+            mot.feedDataGroup(d, n);
+        });
+        feed_mot(pad, mot_dg(3, 0, true, 0x1234, header));
+        feed_label(pad, 0, "A label between the data groups of a slide");
+        feed_mot(pad, mot_dg(4, 0, false, 0x1234, Bytes(image.begin(), image.begin() + 150)));
+        feed_mot(pad, mot_dg(4, 1, true, 0x1234, Bytes(image.begin() + 150, image.end())));
+        check(groups == 3 && objects.size() == 1 && objects[0] == image && name == file &&
+                  pad.getDLSText() == "A label between the data groups of a slide",
+              "a slide from the MOT data groups of the X-PAD, a label in between");
+
+        size_t before = groups;
+        feed_mot(pad, mot_dg(4, 0, true, 0x2222, image), false);
+        check(groups == before, "a data group whose length was not said is not taken");
+        feed_mot(pad, mot_dg(4, 0, true, 0x2222, image), true, 3);
+        pad.discontinuity();
+        feed_mot(pad, mot_dg(4, 1, true, 0x3333, Bytes(40, 0x55)));
+        check(groups == before + 1, "after lost frames a data group begins anew");
+        PadDecoder quiet;
+        feed_mot(quiet, mot_dg(4, 0, true, 0x1234, image));
+        check(groups == before + 1, "a decoder without a callback takes the same frames without harm");
+    }
+
+    {
+        // slides in the TS: pieces in the RDS stream of the service
+        TsMuxer mux;
+        std::vector<uint8_t> rds;
+        mux.setOutput([&](const uint8_t* d, size_t n) {
+            for (size_t i = 0; i + 188 <= n; i += 188) {
+                const uint8_t* t = d + i;
+                if ((((t[1] & 0x1F) << 8) | t[2]) != 0x1100) continue;
+                size_t off = 4 + ((t[3] & 0x20) ? 1 + t[4] : 0);
+                if ((t[1] & 0x40) && off + 9 <= 188) off += 9 + t[off + 8];
+                if (off < 188) rds.insert(rds.end(), t + off, t + 188);
+            }
+        });
+        TsService svc{};
+        svc.sid = 0x1000;
+        svc.pmt_pid = 0x100;
+        svc.audio_pid = 0x1000;
+        svc.rds_pid = 0x1100;
+        mux.addService(svc);
+        // what a receiver makes of the frames: per slide number the pieces, a slide when all are there
+        struct Got { int id; Bytes image; };
+        auto slides = [&]() {
+            std::vector<Got> out;
+            std::map<int, std::map<int, Bytes>> pieces;
+            for (size_t i = 0; i < rds.size(); i++) {
+                if (rds[i] != 0xFE) continue;
+                size_t j = i + 1;
+                Bytes u;
+                for (; j < rds.size() && rds[j] != 0xFF; j++) {
+                    if (rds[j] == 0xFD && j + 1 < rds.size()) u.push_back(static_cast<uint8_t>(0xFD + rds[++j]));
+                    else u.push_back(rds[j]);
+                }
+                if (u.size() >= 16 && u[4] == 0x2D && u[6] == 'd' && u[7] == 'l' && u[8] == 0x02 &&
+                    crc16_ccitt_xor(u.data(), u.size() - 2) == static_cast<uint16_t>(u[u.size() - 2] << 8 | u.back())) {
+                    int id = u[9], piece = u[10] << 8 | u[11], count = u[12] << 8 | u[13];
+                    auto& p = pieces[id];
+                    p[piece] = Bytes(u.begin() + 14, u.end() - 2);
+                    if (static_cast<int>(p.size()) == count) {
+                        Bytes image;
+                        for (auto& [k, b] : p) image.insert(image.end(), b.begin(), b.end());
+                        out.push_back({id, image});
+                        p.clear();
+                    }
+                }
+                i = j;
+            }
+            return out;
+        };
+        Bytes one(3000), two(700);
+        for (size_t i = 0; i < one.size(); i++) one[i] = static_cast<uint8_t>(i * 13 + (i % 3 ? 0 : 0xFD));
+        for (size_t i = 0; i < two.size(); i++) two[i] = static_cast<uint8_t>(0xFF - i);
+        int64_t t = 90000;
+        auto run = [&](int seconds) {
+            for (int i = 0; i < seconds * 1000 / 24; i++, t += 2160) mux.tick(t);
+        };
+        mux.setSlide(0x1000, one.data(), one.size());
+        run(2);
+        auto got = slides();
+        check(got.size() == 1 && got[0].image == one, "a slide goes out in pieces and is whole again");
+        mux.setSlide(0x1000, one.data(), one.size());
+        run(10);
+        check(slides().size() == 1, "the same slide again is not sent again at once");
+        run(15);
+        got = slides();
+        check(got.size() == 2 && got[1].id == got[0].id && got[1].image == one, "but every 20 s, under its number");
+        mux.setSlide(0x1000, two.data(), two.size());
+        run(2);
+        got = slides();
+        check(got.size() == 3 && got[2].id != got[1].id && got[2].image == two, "another slide has another number");
+        Bytes big(UECP_SLIDE_MAX + 1, 0x11);
+        mux.setSlide(0x1000, big.data(), big.size());
+        mux.setSlide(0x1000, big.data(), 0);
+        run(25);
+        got = slides();
+        check(got.size() == 4 && got[3].image == two, "a slide that is too large or empty leaves the one that is on");
     }
 
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);

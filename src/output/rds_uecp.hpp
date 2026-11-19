@@ -51,6 +51,18 @@ std::vector<uint8_t> uecpLabelFrame(const std::string& utf8);
 // rdsRadioText; empty: no text); ab_flag: the A/B flag, changed with the text
 std::vector<uint8_t> uecpRadioTextFrame(const std::string& rds_text, bool ab_flag);
 
+// A slide of the slideshow of a service (an image file, JPEG or PNG), for
+// receivers that know it: in pieces, each a manufacturer's specific command
+// (MEC 0x2D) with the designation "dl" and the command 0x02 in a UECP frame
+// of its own - the number of the slide (another one for another slide), the
+// number of the piece and how many pieces there are (2 bytes each, high byte
+// first), then up to UECP_SLIDE_PIECE bytes of the file. A receiver has the
+// slide when it has all its pieces. No frames for an empty file or one of
+// more than UECP_SLIDE_MAX bytes.
+constexpr size_t UECP_SLIDE_PIECE = 240;
+constexpr size_t UECP_SLIDE_MAX = 128 * 1024;
+std::vector<std::vector<uint8_t>> uecpSlideFrames(uint8_t slide, const uint8_t* data, size_t len);
+
 // A tag of RadioText Plus (RT+, IEC 62106-6): a part of the RadioText and
 // what it is (the content types are those of DL Plus). start and length - 1
 // in characters of the RadioText.

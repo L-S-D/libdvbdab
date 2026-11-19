@@ -198,6 +198,17 @@ public:
     void updateAudioInfo(uint16_t sid, uint8_t aac_profile, uint8_t aac_type);
 
     /**
+     * @brief The slide of the slideshow of a service that is on now
+     * @param sid  Service ID
+     * @param data The image file (JPEG or PNG) as it was sent
+     * @param len  Its size
+     *
+     * It goes out in the RDS stream of the service (see uecpSlideFrames),
+     * at once and then every 20 s; another image replaces it.
+     */
+    void setSlide(uint16_t sid, const uint8_t* data, size_t len);
+
+    /**
      * @brief The time of the ensemble (FIG 0/10), UTC in ms since 1970
      *
      * Call it with the time of the frame that is fed. With it the TS has a
@@ -285,6 +296,21 @@ private:
     static constexpr int64_t RADIO_TEXT_REPEAT_PTS = 3 * 90000;  // again after 3 s
     static constexpr int64_t RADIO_TEXT_PART_PTS = 6 * 90000;    // a part of a long label is on for 6 s
     void showRadioTextPart(RadioText& rt, size_t part);
+
+    // The slide of a service that is on, in UECP frames for its RDS stream:
+    // sent a few frames per tick, and again every SLIDE_REPEAT_PTS for
+    // receivers that came later
+    struct Slide {
+        uint8_t id{0};
+        uint32_t hash{0};
+        std::vector<std::vector<uint8_t>> frames;
+        size_t next{0};           // the next frame to send; frames.size() = all sent
+        int64_t sent_pts{-1};     // when the last one of them went out
+    };
+    std::map<uint16_t, Slide> slides_;
+    static constexpr int64_t SLIDE_REPEAT_PTS = 20 * 90000;
+    static constexpr size_t SLIDE_FRAMES_PER_PES = 5;
+    void outputSlides(int64_t pts);
 
     // PCR tracking - use global timeline for multi-program sync
 

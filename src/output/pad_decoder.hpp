@@ -123,6 +123,12 @@ public:
     void setDLSCallback(DLSCallback cb) { dls_callback_ = std::move(cb); }
     void setDLPlusCallback(DLPlusCallback cb) { dlplus_callback_ = std::move(cb); }
 
+    /// The MSC data groups of the MOT application in the X-PAD (the
+    /// slideshow of the service): each complete one, as it was sent, with
+    /// its CRC still to be checked. Without a callback they are not collected.
+    using DataGroupCallback = std::function<void(const uint8_t* data, size_t len)>;
+    void setMotDataGroupCallback(DataGroupCallback cb) { mot_callback_ = std::move(cb); }
+
     // The PAD of a frame: the F-PAD (2 bytes) and the room the X-PAD ends at:
     // its bytes are the last ones of xpad_room bytes from xpad, in reverse
     // order (DAB+: the data stream element before its F-PAD; DAB: the MPEG
@@ -146,6 +152,14 @@ public:
     size_t getCrcErrors() const { return crc_errors_; }
 
 private:
+    // X-PAD MOT: the data group being collected, its length from the data
+    // group length indicator before it (0: none said)
+    std::vector<uint8_t> mot_dg_;
+    size_t mot_len_{0};
+    bool mot_active_{false};
+    DataGroupCallback mot_callback_;
+    void motComplete();
+
     void subfield(uint8_t app_type, const uint8_t* data, size_t len);
     void dataGroup(const uint8_t* dg, size_t len);
     void segment(const uint8_t* dg, size_t field_len);

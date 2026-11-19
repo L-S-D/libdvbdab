@@ -72,6 +72,8 @@ public:
 
     // Set callback for DL Plus updates (includes parsed artist/title tags)
     void setDLPlusCallback(DLPlusUpdateCallback cb);
+    /// The MOT data groups of the X-PAD (the slideshow), see PadDecoder
+    void setMotDataGroupCallback(std::function<void(const uint8_t* data, size_t len)> cb);
 
     // Get current DLS text (if any)
     const std::string& getDLSText() const;

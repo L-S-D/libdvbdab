@@ -127,6 +127,24 @@ public:
     /// the images of the carousel are not kept.
     void setLogoCallback(std::function<void(const ServiceLogo&)> cb) { logo_callback_ = std::move(cb); }
 
+    /// A slide of the slideshow of an audio service (MOT in its X-PAD, ETSI
+    /// TS 101 499): an image file, JPEG or PNG, usually 320x240. What the
+    /// stations send differs: the cover of the title that plays, the
+    /// programme that is on, news, traffic, the logo of the station.
+    struct ServiceSlide {
+        uint16_t sid;
+        const char* name;        ///< ContentName of the MOT object
+        const char* mime_type;   ///< "image/jpeg" or "image/png"
+        int width, height;       ///< pixels, from the image; 0 = not known
+        const uint8_t* data;
+        size_t len;
+    };
+    /// Each slide as it is complete (they are sent to be shown at once);
+    /// set before the services are started. The slides of a service that
+    /// has an RDS stream and is taken go out in that stream as well (see
+    /// TsMuxer::setSlide).
+    void setSlideCallback(std::function<void(const ServiceSlide&)> cb) { slide_callback_ = std::move(cb); }
+
     /// A complete object of the MOT carousel of a data service (what the
     /// packet decoders of the data subchannels call; public for tests)
     void onMotObject(uint16_t transport_id, const MOTHeaderInfo& header, const uint8_t* data, size_t len);
@@ -202,6 +220,12 @@ private:
     uint32_t si_hash_{0};
     std::map<std::pair<uint16_t, std::string>, uint32_t> logos_told_;
     std::function<void(const ServiceLogo&)> logo_callback_;
+    // Slideshow: a MOT decoder per audio subchannel for the data groups of its X-PAD
+    std::map<uint8_t, std::unique_ptr<PacketDecoder>> slide_decoders_;
+    std::function<void(const ServiceSlide&)> slide_callback_;
+    void attachSlides(uint8_t subchannel_id,
+                      const std::function<void(std::function<void(const uint8_t*, size_t)>)>& set);
+    void onSlide(uint8_t subchannel_id, uint16_t tid, const MOTHeaderInfo& hdr, const uint8_t* data, size_t len);
     void onLogoImage(const std::string& name, const uint8_t* data, size_t len);
     void onServiceInformation(const uint8_t* data, size_t len);
     void tellLogos(const std::string& url);

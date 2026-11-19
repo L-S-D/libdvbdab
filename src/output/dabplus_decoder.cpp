@@ -46,6 +46,10 @@ void DabPlusDecoder::setDLPlusCallback(DLPlusUpdateCallback cb) {
     }
 }
 
+void DabPlusDecoder::setMotDataGroupCallback(std::function<void(const uint8_t* data, size_t len)> cb) {
+    pad_decoder_->setMotDataGroupCallback(std::move(cb));
+}
+
 const std::string& DabPlusDecoder::getDLSText() const {
     static const std::string empty;
     return pad_decoder_ ? pad_decoder_->getDLSText() : empty;

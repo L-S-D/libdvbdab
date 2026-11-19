@@ -92,6 +92,15 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     the designation `dl` and the command 0x01. A receiver that knows it has
     the label in one piece and with characters RDS has none for; others
     skip the frame (Kodi does).
+  - The slideshow of a service (MOT in the X-PAD of its audio, ETSI TS 101
+    499: JPEG or PNG, usually 320x240 - what stations send differs: the cover
+    of the title that plays, the programme that is on, news, traffic, their
+    logo) in the same stream, for receivers that know it: the image file in
+    pieces of 240 bytes, each a manufacturer's specific command (MEC 0x2D,
+    `dl`, command 0x02) with the number of the slide, of the piece and of
+    the pieces. The slide that is on goes out at once and again every 20 s;
+    only for services someone takes (the wanted PIDs). A TS has no other
+    place for it, and a receiver that reads RDS skips these frames.
   - The DL Plus tags of a label as RadioText Plus (RT+, application 0x4BD7):
     a second UECP frame after the RadioText, with the ODA configuration
     (MEC 0x40) and two tags per ODA data message (MEC 0x46), as Kodi reads

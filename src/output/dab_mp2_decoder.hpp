@@ -48,6 +48,8 @@ public:
     // The dynamic label and its DL Plus tags from the PAD at the end of each frame
     void setDLSCallback(std::function<void(const std::string& text)> cb);
     void setDLPlusCallback(std::function<void(const std::string& text, const std::vector<DLPlusTag>& tags)> cb);
+    /// The MOT data groups of the X-PAD (the slideshow), see PadDecoder
+    void setMotDataGroupCallback(std::function<void(const uint8_t* data, size_t len)> cb);
 
     // Feed subchannel frame data (24ms worth)
     // Returns number of MP2 frames extracted

@@ -16,8 +16,11 @@ namespace {
 constexpr size_t XPAD_SUBFIELD_LEN[8] = {4, 6, 8, 12, 16, 24, 32, 48};
 
 // X-PAD application types (table 27)
+constexpr uint8_t APP_DG_LENGTH = 1;   // data group length indicator
 constexpr uint8_t APP_DL_START = 2;
 constexpr uint8_t APP_DL_CONT = 3;
+constexpr uint8_t APP_MOT_START = 12;
+constexpr uint8_t APP_MOT_CONT = 13;
 
 // the application type that continues one (start of a data group -> its continuation)
 uint8_t continuation(uint8_t app_type) {
@@ -40,6 +43,9 @@ void PadDecoder::reset() {
     dg_.clear();
     dg_need_ = 0;
     dg_active_ = false;
+    mot_dg_.clear();
+    mot_len_ = 0;
+    mot_active_ = false;
     seg_toggle_ = -1;
     for (auto& s : seg_) s.clear();
     seg_have_ = 0;
@@ -61,6 +67,18 @@ void PadDecoder::discontinuity() {
     dg_active_ = false;
     last_type_ = 0;
     last_len_ = 0;
+    mot_dg_.clear();
+    mot_len_ = 0;
+    mot_active_ = false;
+}
+
+// the MOT data group has all the bytes its length indicator said
+void PadDecoder::motComplete() {
+    if (!mot_active_ || mot_dg_.size() < mot_len_) return;
+    if (mot_callback_) mot_callback_(mot_dg_.data(), mot_len_);
+    mot_dg_.clear();
+    mot_len_ = 0;
+    mot_active_ = false;
 }
 
 void PadDecoder::processAu(const uint8_t* au, size_t au_len) {
@@ -144,8 +162,28 @@ void PadDecoder::subfield(uint8_t app_type, const uint8_t* data, size_t len) {
         dg_active_ = true;
     } else if (app_type == APP_DL_CONT && dg_active_) {
         dg_.insert(dg_.end(), data, data + len);
+    } else if (app_type == APP_DG_LENGTH) {
+        // the length of the data group that begins next (EN 300 401, 7.4.5.1.1):
+        // Rfa (2 bits), length (14 bits), CRC
+        mot_dg_.clear();
+        mot_active_ = false;
+        mot_len_ = 0;
+        if (mot_callback_ && len >= 4 && crc16_ccitt_xor(data, 2) == static_cast<uint16_t>(data[2] << 8 | data[3]))
+            mot_len_ = static_cast<size_t>(data[0] & 0x3F) << 8 | data[1];
+        return;
+    } else if (app_type == APP_MOT_START) {
+        mot_dg_.assign(data, data + len);
+        mot_active_ = mot_len_ > 0;
+        motComplete();
+        return;
+    } else if (app_type == APP_MOT_CONT) {
+        if (mot_active_) {
+            mot_dg_.insert(mot_dg_.end(), data, data + len);
+            motComplete();
+        }
+        return;
     } else {
-        return;  // another application (MOT, ...): not read here
+        return;  // another application: not read here
     }
 
     // the length of a dynamic label data group follows from its prefix (clause 7.4.5.2):

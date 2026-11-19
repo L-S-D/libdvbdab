@@ -3,6 +3,14 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
+## Not yet released
+
+TS output
+- The slideshow of a service (MOT in the X-PAD of its audio) goes out in
+  its RDS stream: the image in pieces, each a manufacturer's specific
+  command (MEC 0x2D, designation `dl`, command 0x02), at once and again
+  every 20 s, for the services someone takes.
+
 ## 2.7.0
 
 TS output

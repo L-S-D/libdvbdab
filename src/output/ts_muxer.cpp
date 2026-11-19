@@ -47,6 +47,7 @@ void TsMuxer::removeService(uint16_t sid) {
     frame_step_.erase(sid);
     last_audio_pts_.erase(sid);
     radio_text_.erase(sid);
+    slides_.erase(sid);
     // the PAT and SDT no longer list it
     pat_version_ = (pat_version_ + 1) & 0x1F;
     sdt_version_ = (sdt_version_ + 1) & 0x1F;
@@ -156,6 +157,41 @@ void TsMuxer::setRadioTextPlus(uint16_t sid, const std::string& text, const std:
     if (frame == rt.plus_frame) return;
     rt.plus_frame = std::move(frame);
     rt.sent_pts = -1;
+}
+
+void TsMuxer::setSlide(uint16_t sid, const uint8_t* data, size_t len) {
+    uint32_t hash = 2166136261u;
+    for (size_t i = 0; i < len; i++) hash = (hash ^ data[i]) * 16777619u;
+    auto& s = slides_[sid];
+    if (!s.frames.empty() && s.hash == hash) return;   // the slide that is on, again
+    uint8_t id = static_cast<uint8_t>(s.id + 1);
+    std::vector<std::vector<uint8_t>> frames = uecpSlideFrames(id, data, len);
+    if (frames.empty()) return;   // none, or too large: the one that is on stays
+    s.id = id;
+    s.hash = hash;
+    s.frames = std::move(frames);
+    s.next = 0;
+    s.sent_pts = -1;
+}
+
+void TsMuxer::outputSlides(int64_t pts) {
+    for (auto& [sid, s] : slides_) {
+        if (s.next >= s.frames.size()) {
+            if (s.frames.empty() || pts - s.sent_pts < SLIDE_REPEAT_PTS) continue;
+            s.next = 0;   // again, for receivers that were not there
+        }
+        auto it = sid_to_index_.find(sid);
+        if (it == sid_to_index_.end() || !services_[it->second].rds_pid) continue;
+        // a few frames per tick: a slide of 12 kB is out within a quarter of a second
+        std::vector<uint8_t> pes;
+        for (size_t n = 0; n < SLIDE_FRAMES_PER_PES && s.next < s.frames.size(); n++, s.next++) {
+            pes.insert(pes.end(), s.frames[s.next].begin(), s.frames[s.next].end());
+        }
+        auto own = last_audio_pts_.find(sid);
+        outputPes(services_[it->second].rds_pid, pes.data(), pes.size(),
+                  own != last_audio_pts_.end() ? own->second : pts, false, 0, 0xBD);
+        if (s.next >= s.frames.size()) s.sent_pts = pts;
+    }
 }
 
 void TsMuxer::setNowPlaying(uint16_t sid, const std::string& title, const std::string& artist) {
@@ -604,6 +640,7 @@ void TsMuxer::outputEitPresentFollowing() {
 
 void TsMuxer::tick(int64_t pts) {
     outputRadioTexts(pts);
+    outputSlides(pts);
     refreshEitFlags();
 
     // Time-based PSI output (DVB compliant: PAT/PMT every 500ms, SDT every 2s)
