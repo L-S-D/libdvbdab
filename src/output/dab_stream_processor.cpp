@@ -1,5 +1,6 @@
 #include "dab_stream_processor.hpp"
 #include "pad_decoder.hpp"
+#include "../dab_tables.hpp"
 #include "../logging.h"
 #include <algorithm>
 #include <cctype>
@@ -109,6 +110,27 @@ void DabStreamProcessor::makeTranscoder(const TsService& svc) {
         });
 }
 
+// What the PMT says of the AAC audio of a subchannel: as its superframes
+// say it, or AAC-LC when it is transcoded (how many channels the decoder
+// then puts out is not said)
+void DabStreamProcessor::noteAacParams(uint8_t subchannel_id, const DabPlusParams& p) {
+    AacSignalling a = aac_output_ == 2 ? AacSignalling{AAC_PROFILE_LC_L2, 0}
+                                       : dabPlusAacSignalling(p.sbr_flag, p.ps_flag, p.aac_channel_mode);
+    uint16_t said = static_cast<uint16_t>((a.profile << 8) | a.type);
+    auto known = aac_said_.find(subchannel_id);
+    if (known != aac_said_.end() && known->second == said) return;
+    auto sid = subch_to_sid_.find(subchannel_id);
+    if (sid == subch_to_sid_.end()) return;
+    aac_said_[subchannel_id] = said;
+    for (auto& s : services_) {
+        if (s.sid == sid->second) {
+            s.aac_profile = a.profile;
+            s.aac_type = a.type;
+        }
+    }
+    muxer_.updateAudioInfo(sid->second, a.profile, a.type);
+}
+
 void DabStreamProcessor::addService(const TsService& service) {
     TsService svc = service;
     svc.latm = aac_output_ == 1 && svc.dabplus;
@@ -192,6 +214,7 @@ void DabStreamProcessor::startService(uint8_t subchannel_id) {
             decoder->setTimedCallback([this, subchannel_id, dec](const uint8_t* data, size_t len, int64_t au_slot) {
                 audio_frame_count_++;
                 if (len < 7) return;
+                noteAacParams(subchannel_id, dec->getParams());
 
                 // decoded and encoded again while the service is wanted
                 // (its output goes to the muxer); else not put out, but the
@@ -297,6 +320,7 @@ void DabStreamProcessor::onDLPlus(uint8_t subchannel_id, const std::string& text
 void DabStreamProcessor::stopService(uint8_t subchannel_id) {
     dabplus_decoders_.erase(subchannel_id);
     transcoders_.erase(subchannel_id);
+    aac_said_.erase(subchannel_id);
     mp2_decoders_.erase(subchannel_id);
     mp2_last_frame_.erase(subchannel_id);
     auto it = subch_to_sid_.find(subchannel_id);

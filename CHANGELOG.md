@@ -3,6 +3,14 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
+## Not yet released
+
+TS output
+- The PMT of a DAB+ service has an AAC_descriptor (profile and level, mono
+  or stereo) once its first superframe was read. Each PMT has a version of
+  its own: a change of one service no longer gives the PMTs of all of them
+  a new version.
+
 ## 2.5.0
 
 Licence

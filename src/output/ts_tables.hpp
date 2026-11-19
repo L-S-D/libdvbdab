@@ -57,6 +57,9 @@ struct TsService {
     int bitrate{0};         ///< Audio bitrate in kbps
     std::string language;   ///< Language of the audio, ISO 639-2 (three letters); empty = not known
     uint8_t content{0};     ///< What it broadcasts, as the nibbles of a DVB content_descriptor; 0 = not known
+    uint8_t aac_profile{0}; ///< profile_and_level of its AAC audio, for a DVB AAC_descriptor; 0 = not known
+    uint8_t aac_type{0};    ///< AAC_type of that descriptor; 0 = not said
+    uint8_t pmt_version{0}; ///< Version of its PMT (the muxer counts it)
     bool eit_schedule{false};  ///< The TS has an EIT schedule for it (the muxer sets it)
     bool eit_pf{false};        ///< The TS has an EIT present/following for it (the muxer sets it)
 };
@@ -64,9 +67,10 @@ struct TsService {
 /// The PAT: every service with the PID of its PMT
 std::vector<uint8_t> buildPatSection(uint16_t tsid, uint8_t version, const std::vector<TsService>& services);
 
-/// The PMT of a service: its audio (which carries the PCR; with the
-/// language of the service, when that is known) and, with an rds_pid, its RadioText
-std::vector<uint8_t> buildPmtSection(const TsService& service, uint8_t version);
+/// The PMT of a service, in its pmt_version: its audio (which carries the
+/// PCR; with the language of the service and, for AAC, its profile, when
+/// they are known) and, with an rds_pid, its RadioText
+std::vector<uint8_t> buildPmtSection(const TsService& service);
 
 /// The SDT (actual), in as many sections of at most 1024 bytes as the
 /// services need. A service without a provider gets default_provider.

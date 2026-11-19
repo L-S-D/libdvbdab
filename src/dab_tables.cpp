@@ -104,4 +104,11 @@ uint8_t dabPtyToDvbContent(uint8_t pty, uint8_t international_table) {
     return PTY_CONTENT[pty];
 }
 
+AacSignalling dabPlusAacSignalling(bool sbr, bool ps, bool stereo) {
+    if (sbr && ps) return {0x30, 0x43};          // HE AAC v2 profile level 2; HE AAC v2 audio, stereo
+    uint8_t type = stereo ? 0x03 : 0x01;         // HE AAC audio, stereo / single mono channel
+    if (sbr) return {0x2C, type};                // HE AAC profile level 2
+    return {AAC_PROFILE_LC_L2, type};            // AAC profile level 2
+}
+
 } // namespace dvbdab

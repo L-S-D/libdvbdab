@@ -187,6 +187,16 @@ public:
     void updateServiceInfo(uint16_t sid, const std::string& language, uint8_t content);
 
     /**
+     * @brief What the AAC audio of a service is, for the AAC_descriptor of its PMT
+     * @param sid         Service ID
+     * @param aac_profile profile_and_level (ISO/IEC 14496-3); 0 = not known
+     * @param aac_type    AAC_type (EN 300 468); 0 = not said
+     *
+     * A change gets into the PMT with a new version.
+     */
+    void updateAudioInfo(uint16_t sid, uint8_t aac_profile, uint8_t aac_type);
+
+    /**
      * @brief The time of the ensemble (FIG 0/10), UTC in ms since 1970
      *
      * Call it with the time of the frame that is fed. With it the TS has a
@@ -253,7 +263,6 @@ private:
 
     // PSI version numbers
     uint8_t pat_version_{0};
-    uint8_t pmt_version_{0};
     uint8_t sdt_version_{0};
 
     // RadioText per service: the UECP frame of its text, when it went out last

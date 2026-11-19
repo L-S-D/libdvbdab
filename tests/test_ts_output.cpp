@@ -184,6 +184,31 @@ static std::vector<uint8_t> eti(int fct, const std::vector<std::vector<uint8_t>>
     return f;
 }
 
+// a superframe of a 24 kbit/s DAB+ subchannel at 48 kHz with SBR (5 frames
+// of 72 bytes, 3 AUs); flags: the byte with dac_rate, sbr_flag,
+// aac_channel_mode and ps_flag
+static std::vector<uint8_t> superframe(uint8_t fill, uint8_t flags) {
+    const size_t fs = 72, audio = fs * 5 - 3 * 10;
+    std::vector<uint8_t> sf(fs * 5, 0);
+    sf[2] = flags;
+    const size_t start[4] = {6, 114, 222, audio};
+    sf[3] = start[1] >> 4;
+    sf[4] = static_cast<uint8_t>((start[1] & 0x0F) << 4 | (start[2] >> 8));
+    sf[5] = start[2] & 0xFF;
+    for (int i = 0; i < 3; i++) {
+        size_t len = start[i + 1] - start[i];
+        for (size_t k = 0; k + 2 < len; k++) sf[start[i] + k] = fill;
+        uint16_t c = crc16_ccitt_xor(sf.data() + start[i], len - 2);
+        sf[start[i] + len - 2] = c >> 8;
+        sf[start[i] + len - 1] = c & 0xFF;
+    }
+    uint16_t crc = 0;
+    for (int i = 0; i < 9; i++) crc = static_cast<uint16_t>((crc << 8) ^ firecode_table[((crc >> 8) ^ sf[2 + i]) & 0xFF]);
+    sf[0] = crc >> 8;
+    sf[1] = crc & 0xFF;
+    return sf;
+}
+
 static void add_services(DabStreamProcessor& p, int n) {
     p.setEnsemble(0x1234, "Test Ensemble", "Test Ensemble");
     for (int i = 0; i < n; i++) {
@@ -377,13 +402,38 @@ int main() {
         svc.pmt_pid = 0x100;
         svc.audio_pid = 0x1000;
         svc.dabplus = true;
-        std::vector<uint8_t> plain = buildPmtSection(svc, 3);
+        svc.pmt_version = 3;
+        std::vector<uint8_t> plain = buildPmtSection(svc);
         svc.language = "nor";
-        std::vector<uint8_t> with = buildPmtSection(svc, 3);
+        std::vector<uint8_t> with = buildPmtSection(svc);
         check(with.size() == plain.size() + 6 && has(with, {0xF0, 0x06, 0x0A, 0x04, 'n', 'o', 'r', 0x00}) &&
                   !has(plain, {0x0A, 0x04}) && dvb_crc32(with.data(), with.size()) == 0 &&
                   (((with[1] & 0x0F) << 8) | with[2]) == static_cast<int>(with.size()) - 3,
               "the PMT has the language of the audio when the ensemble says it, and only then");
+
+        // the AAC_descriptor: profile and level, and the AAC type when it is said
+        svc.aac_profile = 0x30;
+        svc.aac_type = 0x43;
+        std::vector<uint8_t> aac = buildPmtSection(svc);
+        svc.aac_type = 0;
+        std::vector<uint8_t> lc = buildPmtSection(svc);
+        svc.dabplus = false;
+        std::vector<uint8_t> mp2 = buildPmtSection(svc);
+        svc.dabplus = true;
+        svc.aac_profile = 0;
+        check(aac.size() == with.size() + 5 &&
+                  has(aac, {0xF0, 0x0B, 0x0A, 0x04, 'n', 'o', 'r', 0x00, 0x7C, 0x03, 0x30, 0x80, 0x43}) &&
+                  lc.size() == with.size() + 3 && has(lc, {0xF0, 0x09, 0x0A, 0x04, 'n', 'o', 'r', 0x00, 0x7C, 0x01, 0x30}) &&
+                  !has(mp2, {0x7C}) && !has(with, {0x7C}) && dvb_crc32(aac.data(), aac.size()) == 0 &&
+                  dvb_crc32(lc.data(), lc.size()) == 0 && ((aac[5] >> 1) & 0x1F) == 3,
+              "the PMT has an AAC_descriptor for AAC audio whose profile is known, and only then");
+        AacSignalling a_lc = dabPlusAacSignalling(false, false, true), a_lc_ps = dabPlusAacSignalling(false, true, false),
+                      a_he = dabPlusAacSignalling(true, false, false), a_he2 = dabPlusAacSignalling(true, false, true),
+                      a_v2 = dabPlusAacSignalling(true, true, false);
+        check(a_lc.profile == 0x29 && a_lc.type == 0x03 && a_lc_ps.profile == 0x29 && a_lc_ps.type == 0x01 &&
+                  a_he.profile == 0x2C && a_he.type == 0x01 && a_he2.profile == 0x2C && a_he2.type == 0x03 &&
+                  a_v2.profile == 0x30 && a_v2.type == 0x43,
+              "DAB+ audio as AAC, HE AAC or HE AAC v2 profile of level 2, mono or stereo");
 
         EpgSchedule sch = schedule(0x1000, 1795000000, 3, 1800);
         auto und = buildEitScheduleSections(0x1000, 1, 1, 0, sch.programmes);
@@ -446,6 +496,65 @@ int main() {
             bool pmt = std::search(ts.begin() + static_cast<std::ptrdiff_t>(cut), ts.end(), lang, lang + 5) != ts.end();
             bool eit = std::search(ts.begin() + static_cast<std::ptrdiff_t>(cut), ts.end(), content, content + 4) != ts.end();
             check(!before && pmt && eit, "language and content that come while the stream runs are in PMT and EIT");
+        }
+    }
+
+    {
+        // DAB+ audio: once its superframes are read, the PMT says what it is,
+        // in a new version; the PMT of another service keeps its version
+        struct Case { uint8_t flags; int mode; std::vector<uint8_t> desc; const char* what; };
+        const Case cases[] = {
+            {0x60, 0, {0x7C, 0x03, 0x2C, 0x80, 0x01}, "HE AAC mono (ADTS): the AAC_descriptor says so"},
+            {0x70, 1, {0x7C, 0x03, 0x2C, 0x80, 0x03}, "HE AAC stereo (LATM): the AAC_descriptor says so"},
+            {0x68, 0, {0x7C, 0x03, 0x30, 0x80, 0x43}, "HE AAC v2 (ADTS): the AAC_descriptor says so"},
+        };
+        for (const Case& k : cases) {
+            DabStreamProcessor p;
+            p.setAacOutput(k.mode);
+            std::map<uint16_t, std::vector<std::vector<uint8_t>>> pmts;   // per PID: the different PMTs, in order
+            p.setOutput([&](const uint8_t* d, size_t len) {
+                for (size_t i = 0; i + 188 <= len; i += 188) {
+                    const uint8_t* t = d + i;
+                    uint16_t pid = static_cast<uint16_t>(((t[1] & 0x1F) << 8) | t[2]);
+                    if (pid < 0x100 || pid >= 0x200 || !(t[1] & 0x40)) continue;
+                    size_t n = 3 + (((t[6] & 0x0F) << 8) | t[7]);
+                    std::vector<uint8_t> sec(t + 5, t + 5 + n);
+                    if (pmts[pid].empty() || pmts[pid].back() != sec) pmts[pid].push_back(sec);
+                }
+            });
+            p.setEnsemble(0x1234, "Test Ensemble", "Test Ensemble");
+            for (int i = 0; i < 2; i++) {
+                TsService s{};
+                s.sid = static_cast<uint16_t>(0x1000 + i);
+                s.pmt_pid = static_cast<uint16_t>(0x100 + i);
+                s.audio_pid = static_cast<uint16_t>(0x1000 + i);
+                s.name = "Service " + std::to_string(i);
+                s.dabplus = i == 0;
+                s.subchannel_id = static_cast<uint8_t>(i);
+                s.bitrate = i == 0 ? 24 : 64;
+                p.addService(s);
+            }
+            p.startAllServices();
+            std::vector<uint8_t> mp2(384, 0x11);
+            mp2[0] = 0xFF; mp2[1] = 0xF5; mp2[2] = 0x84; mp2[3] = 0x00; mp2[382] = 0; mp2[383] = 0;
+            // 2 s without audio of the DAB+ service, then 4 s with it
+            for (int i = 0; i < 250; i++) {
+                std::vector<uint8_t> sf = superframe(static_cast<uint8_t>(0x40 + i / 5), k.flags);
+                std::vector<std::vector<uint8_t>> subs;
+                if (i < 85) subs.emplace_back(72, 0x00);
+                else subs.emplace_back(sf.begin() + (i % 5) * 72, sf.begin() + (i % 5) * 72 + 72);
+                subs.emplace_back(mp2.begin() + (i % 2) * 192, mp2.begin() + (i % 2) * 192 + 192);
+                auto f = eti(i, subs);
+                p.feedEtiFrame(f.data(), f.size());
+            }
+            auto has = [](const std::vector<uint8_t>& in, const std::vector<uint8_t>& what) {
+                return std::search(in.begin(), in.end(), what.begin(), what.end()) != in.end();
+            };
+            const auto& a = pmts[0x100];
+            check(a.size() == 2 && !has(a[0], {0x7C}) && has(a[1], k.desc) && ((a[0][5] >> 1) & 0x1F) == 0 &&
+                      ((a[1][5] >> 1) & 0x1F) == 1 && a[1][12] == (k.mode == 1 ? 0x11 : 0x0F) &&
+                      pmts[0x101].size() == 1 && !has(pmts[0x101][0], {0x7C}),
+                  k.what);
         }
     }
 

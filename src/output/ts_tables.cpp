@@ -81,7 +81,8 @@ std::vector<uint8_t> buildPatSection(uint16_t tsid, uint8_t version, const std::
     return section;
 }
 
-std::vector<uint8_t> buildPmtSection(const TsService& service, uint8_t version) {
+std::vector<uint8_t> buildPmtSection(const TsService& service) {
+    uint8_t version = service.pmt_version;
     std::vector<uint8_t> section;
     section.reserve(32);  // PMT: fixed ~21 bytes + 4 bytes CRC
 
@@ -122,19 +123,31 @@ std::vector<uint8_t> buildPmtSection(const TsService& service, uint8_t version) 
     section.push_back(0xE0 | ((service.audio_pid >> 8) & 0x1F));
     section.push_back(service.audio_pid & 0xFF);
 
-    // reserved(4) + ES_info_length(12): the language of the audio, when it
-    // is known (ISO_639_language_descriptor, audio_type 0 = undefined)
+    // The descriptors of the audio. Its language, when it is known
+    // (ISO_639_language_descriptor, audio_type 0 = undefined)
+    std::vector<uint8_t> es_info;
     if (service.language.size() == 3) {
-        section.push_back(0xF0);
-        section.push_back(0x06);
-        section.push_back(0x0A);
-        section.push_back(0x04);
-        for (char c : service.language) section.push_back(static_cast<uint8_t>(c));
-        section.push_back(0x00);
-    } else {
-        section.push_back(0xF0);
-        section.push_back(0x00);
+        es_info.push_back(0x0A);
+        es_info.push_back(0x04);
+        for (char c : service.language) es_info.push_back(static_cast<uint8_t>(c));
+        es_info.push_back(0x00);
     }
+    // The profile of AAC audio, when it is known (AAC_descriptor, EN 300 468
+    // annex H): profile_and_level, and with an AAC_type the flags (AAC_type
+    // follows, no SAOC-DE) and that type
+    if (service.dabplus && service.aac_profile) {
+        es_info.push_back(0x7C);
+        es_info.push_back(service.aac_type ? 0x03 : 0x01);
+        es_info.push_back(service.aac_profile);
+        if (service.aac_type) {
+            es_info.push_back(0x80);
+            es_info.push_back(service.aac_type);
+        }
+    }
+    // reserved(4) + ES_info_length(12)
+    section.push_back(0xF0);
+    section.push_back(static_cast<uint8_t>(es_info.size()));
+    section.insert(section.end(), es_info.begin(), es_info.end());
 
     // its dynamic label as RDS: stream type 0x89 with an ancillary_data_descriptor
     // (EN 300 468: tag 0x6B, ancillary_data_identifier bit 6 = RDS via UECP coding)

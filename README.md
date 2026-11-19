@@ -72,6 +72,10 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     they carry the programme type of the service as their content (genre;
     the RDS types of the international table 1, put into the DVB content
     codes).
+  - The PMT of a DAB+ service says what its AAC audio is (AAC_descriptor:
+    AAC, HE AAC or HE AAC v2 profile, mono or stereo; AAC profile when it is
+    transcoded) once its first superframe was read, in a new version of
+    that PMT.
   - The TDT has the time of the ensemble, not the clock of the host: none
     when the ensemble sends no time.
   - Deterministic PID allocation based on subchannel ID: PMT 0x100, audio

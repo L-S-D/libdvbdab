@@ -25,4 +25,21 @@ std::string iso639ForDvb(const std::string& language);
 /// others give 0.
 uint8_t dabPtyToDvbContent(uint8_t pty, uint8_t international_table);
 
+/// What a DVB AAC_descriptor (EN 300 468 annex H) says of DAB+ audio put
+/// out as it is: profile_and_level (ISO/IEC 14496-3 table 1.14) and
+/// AAC_type (the component types of stream_content 6)
+struct AacSignalling {
+    uint8_t profile;  ///< AAC, HE AAC or HE AAC v2 profile, level 2
+    uint8_t type;     ///< mono, stereo or HE AAC v2 stereo
+};
+
+/// From the superframe header: SBR used, parametric stereo signalled, the
+/// AAC core is stereo. Parametric stereo counts only with SBR. MPEG
+/// Surround is not said: the descriptor is about the AAC core.
+AacSignalling dabPlusAacSignalling(bool sbr, bool ps, bool stereo);
+
+/// profile_and_level of AAC-LC of up to two channels and 48 kHz (what the
+/// transcoder puts out): AAC profile, level 2
+constexpr uint8_t AAC_PROFILE_LC_L2 = 0x29;
+
 } // namespace dvbdab

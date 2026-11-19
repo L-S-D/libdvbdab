@@ -80,7 +80,7 @@ void TsMuxer::updateServiceInfo(uint16_t sid, const std::string& language, uint8
     if (it == sid_to_index_.end()) return;
     TsService& s = services_[it->second];
     if (s.language == language && s.content == content) return;
-    if (s.language != language) pmt_version_ = (pmt_version_ + 1) & 0x1F;
+    if (s.language != language) s.pmt_version = (s.pmt_version + 1) & 0x1F;
     s.language = language;
     s.content = content;
     // its events say both
@@ -88,6 +88,16 @@ void TsMuxer::updateServiceInfo(uint16_t sid, const std::string& language, uint8
         schedule_changed_[sid] = true;
         eit_carousel_pending_ = true;
     }
+}
+
+void TsMuxer::updateAudioInfo(uint16_t sid, uint8_t aac_profile, uint8_t aac_type) {
+    auto it = sid_to_index_.find(sid);
+    if (it == sid_to_index_.end()) return;
+    TsService& s = services_[it->second];
+    if (s.aac_profile == aac_profile && s.aac_type == aac_type) return;
+    s.aac_profile = aac_profile;
+    s.aac_type = aac_type;
+    s.pmt_version = (s.pmt_version + 1) & 0x1F;
 }
 
 void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
@@ -193,7 +203,7 @@ void TsMuxer::outputPat() {
 }
 
 void TsMuxer::outputPmt(const TsService& service) {
-    outputSection(service.pmt_pid, buildPmtSection(service, pmt_version_));
+    outputSection(service.pmt_pid, buildPmtSection(service));
 }
 
 void TsMuxer::outputSdt() {

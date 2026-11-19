@@ -159,6 +159,9 @@ private:
     std::set<uint16_t> wanted_pids_;
     bool isWanted(const TsService& svc) const;
     void makeTranscoder(const TsService& svc);
+    // per DAB+ subchannel: profile and type of its audio the PMT was told
+    std::map<uint8_t, uint16_t> aac_said_;
+    void noteAacParams(uint8_t subchannel_id, const DabPlusParams& p);
     int last_fct_{-1};
     int64_t frame_no_{0};
     std::map<uint8_t, int64_t> mp2_last_frame_;
