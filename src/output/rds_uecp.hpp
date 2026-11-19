@@ -29,6 +29,24 @@ struct RdsText {
 };
 RdsText rdsRadioTextMapped(const std::string& utf8);
 
+// A text longer than a RadioText, whole: in parts of at most RDS_RT_MAX
+// characters, cut at spaces, to be sent one after the other (at most
+// RDS_RT_PARTS; a DAB label has up to 128 characters). Each part with the
+// places of the characters of the source that are in it (-1 for the
+// others), so the RT+ tags of a part come from rtPlusTags() as before. A
+// text that fits has one part, an empty one none.
+constexpr size_t RDS_RT_PARTS = 4;
+std::vector<RdsText> rdsRadioTextParts(const std::string& utf8);
+
+// A UECP frame with the whole label as it is, UTF-8, for receivers that
+// know it: a manufacturer's specific command (MEC 0x2D) with the
+// designation "dl" and the command 0x01, then the text - at most
+// UECP_LABEL_MAX bytes of it, cut between two characters. RadioText has 64
+// characters of the RDS character set; a DAB label has up to 128 of any.
+// Empty without a text.
+constexpr size_t UECP_LABEL_MAX = 250;
+std::vector<uint8_t> uecpLabelFrame(const std::string& utf8);
+
 // A UECP frame with a RadioText message (MEC 0x0A) of rds_text (from
 // rdsRadioText; empty: no text); ab_flag: the A/B flag, changed with the text
 std::vector<uint8_t> uecpRadioTextFrame(const std::string& rds_text, bool ab_flag);

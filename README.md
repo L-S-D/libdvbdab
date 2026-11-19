@@ -84,13 +84,21 @@ C/C++ library for receiving DAB/DAB+ (Digital Audio Broadcasting) from DVB satel
     it: UECP frames in a stream of type 0x89 with an ancillary_data_descriptor
     ("RDS via UECP"), on a change and then every 3 s. tvheadend passes it on
     as "RDS", Kodi shows it. RadioText has at most 64 characters: a longer
-    label is cut at a word. The programme guide (EIT schedule) stays apart.
+    label (DAB has up to 128) goes out whole in parts of up to 64, cut at
+    words, each on for 6 s in turn as a new RadioText. The programme guide
+    (EIT schedule) stays apart.
+  - The whole label as it is (UTF-8, up to 250 bytes) in a UECP frame of
+    its own after these: a manufacturer's specific command (MEC 0x2D) with
+    the designation `dl` and the command 0x01. A receiver that knows it has
+    the label in one piece and with characters RDS has none for; others
+    skip the frame (Kodi does).
   - The DL Plus tags of a label as RadioText Plus (RT+, application 0x4BD7):
     a second UECP frame after the RadioText, with the ODA configuration
     (MEC 0x40) and two tags per ODA data message (MEC 0x46), as Kodi reads
     them. The markers are put from the characters of the label to those of
-    the RadioText; a tag that the cut to 64 characters took, or that does
-    not fit the fields of RT+, is left out.
+    the RadioText; each part of a long label has the tags that are in it,
+    and a tag across the cut, or one that does not fit the fields of RT+,
+    is left out.
 
 - **EPG Support**
   - The programme information files of the binary SPI/EPG (ETSI TS 102 371,

@@ -306,6 +306,94 @@ int main() {
         check(count(mark) == 0, "with a new RadioText the old tags are gone");
     }
 
+    {
+        // a label longer than a RadioText: its parts, each a RadioText, and the tags in each
+        const std::string text = "Now on air: The Morning Show with the latest news, the weather and "
+                                 "the traffic for the whole region, every half hour";
+        auto parts = rdsRadioTextParts(text);
+        bool ok = text.size() > 64 && parts.size() == 2 && parts[0].text.size() <= 64 && parts[1].text.size() <= 64 &&
+                  parts[0].text + " " + parts[1].text == text && rdsRadioTextMapped(text).text == parts[0].text;
+        check(ok, "a long label is whole in two RadioTexts, cut at a space");
+        check(rdsRadioTextParts("Short").size() == 1 && rdsRadioTextParts("Short")[0].text == "Short" &&
+                  rdsRadioTextParts("").empty() && rdsRadioTextMapped("").text.empty(),
+              "a short label is one RadioText, an empty one none");
+        std::string huge;
+        for (int i = 0; i < 60; i++) huge += "word ";
+        auto many = rdsRadioTextParts(huge);
+        bool fits = many.size() == RDS_RT_PARTS;
+        for (const auto& m : many) fits = fits && !m.text.empty() && m.text.size() <= 64 && m.text.back() != ' ';
+        check(fits, "no more parts than RDS_RT_PARTS, none longer than a RadioText");
+        size_t at = text.find("traffic");
+        std::vector<std::array<uint8_t, 3>> tags = {{1, static_cast<uint8_t>(at), 6}, {4, 12, 15}};
+        auto t0 = rtPlusTags(parts[0], tags), t1 = rtPlusTags(parts[1], tags);
+        check(ok && t0.size() == 1 && t0[0].content_type == 4 && t0[0].start == 12 && t0[0].length_minus_1 == 15 &&
+                  t1.size() == 1 && t1[0].content_type == 1 && t1[0].start == parts[1].text.find("traffic") &&
+                  t1[0].length_minus_1 == 6,
+              "each part has the RT+ tags that are in it, by where they are in that part");
+
+        // the whole label in a frame of its own
+        auto unstuff = [](const std::vector<uint8_t>& f) {
+            std::vector<uint8_t> u;
+            for (size_t i = 1; i + 1 < f.size(); i++) {
+                if (f[i] == 0xFD && i + 2 < f.size()) u.push_back(static_cast<uint8_t>(0xFD + f[++i]));
+                else u.push_back(f[i]);
+            }
+            return u;
+        };
+        auto f = uecpLabelFrame(text);
+        auto u = unstuff(f);
+        bool frame_ok = f.size() > 12 && f.front() == 0xFE && f.back() == 0xFF && u.size() == 4 + 5 + text.size() + 2 &&
+                        u[3] == 5 + text.size() && u[4] == 0x2D && u[5] == 3 + text.size() && u[6] == 'd' &&
+                        u[7] == 'l' && u[8] == 0x01 && std::string(u.begin() + 9, u.end() - 2) == text &&
+                        crc16_ccitt_xor(u.data(), u.size() - 2) == static_cast<uint16_t>(u[u.size() - 2] << 8 | u.back());
+        check(frame_ok, "the whole label in a manufacturer's specific command (MEC 0x2D, 'dl', 0x01)");
+        std::string wide;
+        for (int i = 0; i < 150; i++) wide += "\xC3\xA4";   // 150 times a letter of two bytes
+        auto w = unstuff(uecpLabelFrame(wide));
+        check(uecpLabelFrame("").empty() && w.size() == 4 + 5 + 250 + 2 && w[5] == 253 && w[w.size() - 3] == 0xA4,
+              "a label of more than 250 bytes is cut between two characters; none without a text");
+
+        // in the TS: the parts take turns, each with the other A/B flag; the whole label goes with them
+        TsMuxer mux;
+        std::vector<uint8_t> rds;   // the PES payloads of the RDS PID
+        mux.setOutput([&](const uint8_t* d, size_t n) {
+            for (size_t i = 0; i + 188 <= n; i += 188) {
+                const uint8_t* t = d + i;
+                if ((((t[1] & 0x1F) << 8) | t[2]) != 0x1100) continue;
+                size_t off = 4 + ((t[3] & 0x20) ? 1 + t[4] : 0);
+                if ((t[1] & 0x40) && off + 9 <= 188) off += 9 + t[off + 8];
+                if (off < 188) rds.insert(rds.end(), t + off, t + 188);
+            }
+        });
+        TsService svc{};
+        svc.sid = 0x1000;
+        svc.pmt_pid = 0x100;
+        svc.audio_pid = 0x1000;
+        svc.rds_pid = 0x1100;
+        mux.addService(svc);
+        mux.setRadioText(0x1000, text);
+        mux.setRadioTextPlus(0x1000, text, tags, false, true);
+        for (int i = 0; i < 1000; i++) mux.tick(90000 + i * 2160);   // 24 s
+        // the RadioText frames in order: which part, which A/B flag
+        std::vector<std::pair<int, int>> seen;
+        for (size_t i = 0; i + 5 < rds.size(); i++) {
+            if (rds[i] != 0xFE || rds[i + 5] != 0x0A) continue;
+            size_t len = rds[i + 8];
+            if (len < 1 || i + 9 + len > rds.size()) continue;
+            std::string rt(rds.begin() + static_cast<std::ptrdiff_t>(i) + 10, rds.begin() + static_cast<std::ptrdiff_t>(i + 9 + len));
+            int part = rt == parts[0].text ? 0 : rt == parts[1].text ? 1 : -1;
+            if (seen.empty() || seen.back().first != part) seen.push_back({part, rds[i + 9] & 1});
+        }
+        bool turns = seen.size() >= 4;
+        for (size_t i = 0; turns && i < seen.size(); i++) {
+            turns = seen[i].first == static_cast<int>(i % 2) && (i == 0 || seen[i].second != seen[i - 1].second);
+        }
+        check(turns, "in the TS the parts of a long label take turns, each a new RadioText (A/B flag)");
+        size_t labels = 0;
+        for (auto it = rds.begin(); (it = std::search(it, rds.end(), text.begin(), text.end())) != rds.end(); ++it) labels++;
+        check(labels >= 6, "and the whole label goes with every one of them");
+    }
+
     std::printf("%s (%d failures)\n", failures ? "FAILED" : "passed", failures);
     return failures ? 1 : 0;
 }

@@ -12,6 +12,7 @@ constexpr uint8_t UECP_STA = 0xFE;   // start of a frame
 constexpr uint8_t UECP_STP = 0xFF;   // its end
 constexpr uint8_t UECP_STUFF = 0xFD; // FD, FE, FF inside a frame: FD 00, FD 01, FD 02
 constexpr uint8_t MEC_RT = 0x0A;     // RadioText
+constexpr uint8_t MEC_MANUFACTURER = 0x2D;  // manufacturer's specific command
 constexpr uint8_t MEC_ODA_CONF = 0x40;  // ODA configuration and short message command
 constexpr uint8_t MEC_ODA_DATA = 0x46;  // ODA data
 constexpr uint16_t RT_PLUS_AID = 0x4BD7;  // the application identification of RT+
@@ -30,9 +31,9 @@ std::string rdsRadioText(const std::string& utf8) {
     return rdsRadioTextMapped(utf8).text;
 }
 
-RdsText rdsRadioTextMapped(const std::string& utf8) {
+// the text in the RDS character set, with where each character of the source went
+static RdsText rdsWhole(const std::string& utf8) {
     RdsText r;
-    // character by character, to know where each one goes
     for (size_t i = 0; i < utf8.size();) {
         size_t n = 1;
         while (i + n < utf8.size() && (static_cast<unsigned char>(utf8[i + n]) & 0xC0) == 0x80) n++;
@@ -42,11 +43,40 @@ RdsText rdsRadioTextMapped(const std::string& utf8) {
         r.text += one;
         i += n;
     }
-    r.text.resize(cutAt(r.text));
-    while (!r.text.empty() && r.text.back() == ' ') r.text.pop_back();
-    for (size_t c = 0; c < r.at.size(); c++) {
-        if (static_cast<size_t>(r.at[c] + r.width[c]) > r.text.size()) r.at[c] = -1;
+    return r;
+}
+
+std::vector<RdsText> rdsRadioTextParts(const std::string& utf8) {
+    RdsText whole = rdsWhole(utf8);
+    std::vector<RdsText> parts;
+    size_t pos = 0;
+    while (parts.size() < RDS_RT_PARTS) {
+        while (pos < whole.text.size() && whole.text[pos] == ' ' && !parts.empty()) pos++;   // (cut at a space)
+        if (pos >= whole.text.size()) break;
+        RdsText p;
+        p.text = whole.text.substr(pos);
+        p.text.resize(cutAt(p.text));
+        size_t taken = p.text.size();
+        while (!p.text.empty() && p.text.back() == ' ') p.text.pop_back();
+        p.at.assign(whole.at.size(), -1);
+        p.width = whole.width;
+        for (size_t c = 0; c < whole.at.size(); c++) {
+            size_t from = static_cast<size_t>(whole.at[c]), to = from + static_cast<size_t>(whole.width[c]);
+            if (from >= pos && to <= pos + p.text.size()) p.at[c] = static_cast<int>(from - pos);
+        }
+        pos += taken;
+        if (!p.text.empty()) parts.push_back(std::move(p));
     }
+    return parts;
+}
+
+RdsText rdsRadioTextMapped(const std::string& utf8) {
+    std::vector<RdsText> parts = rdsRadioTextParts(utf8);
+    if (!parts.empty()) return parts.front();
+    // no text: every character of the source is nowhere
+    RdsText r = rdsWhole(utf8);
+    r.text.clear();
+    for (int& a : r.at) a = -1;
     return r;
 }
 
@@ -82,6 +112,21 @@ std::vector<uint8_t> uecpRadioTextFrame(const std::string& rds_text, bool ab_fla
     std::vector<uint8_t> msg = {MEC_RT, 0x00, 0x00, static_cast<uint8_t>(1 + rds_text.size()),
                                 static_cast<uint8_t>(ab_flag ? 0x01 : 0x00)};
     msg.insert(msg.end(), rds_text.begin(), rds_text.end());
+    return uecpFrame(msg);
+}
+
+std::vector<uint8_t> uecpLabelFrame(const std::string& utf8) {
+    if (utf8.empty()) return {};
+    // at most UECP_LABEL_MAX bytes, not cut inside a character
+    size_t n = utf8.size();
+    if (n > UECP_LABEL_MAX) {
+        n = UECP_LABEL_MAX;
+        while (n > 0 && (static_cast<unsigned char>(utf8[n]) & 0xC0) == 0x80) n--;
+    }
+    // message element: MEC, message element length, the designation, the
+    // command (0x01: a dynamic label in UTF-8), the text
+    std::vector<uint8_t> msg = {MEC_MANUFACTURER, static_cast<uint8_t>(3 + n), 'd', 'l', 0x01};
+    msg.insert(msg.end(), utf8.begin(), utf8.begin() + static_cast<std::ptrdiff_t>(n));
     return uecpFrame(msg);
 }
 

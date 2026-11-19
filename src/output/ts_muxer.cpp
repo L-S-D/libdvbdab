@@ -100,15 +100,44 @@ void TsMuxer::updateAudioInfo(uint16_t sid, uint8_t aac_profile, uint8_t aac_typ
     s.pmt_version = (s.pmt_version + 1) & 0x1F;
 }
 
-void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
-    std::string rds = rdsRadioText(text);
-    auto& rt = radio_text_[sid];
-    if (rds == rt.text && !rt.frame.empty()) return;
-    rt.text = rds;
+// the part of a label that is on: its RadioText and the RT+ tags that are in it
+void TsMuxer::showRadioTextPart(RadioText& rt, size_t part) {
+    rt.part = part;
+    rt.text = rt.parts[part].text;
     rt.ab = !rt.ab;  // a new text: receivers start it anew
-    rt.frame = uecpRadioTextFrame(rds, rt.ab);
-    rt.plus_frame.clear();  // the tags were about the old text
+    rt.frame = uecpRadioTextFrame(rt.text, rt.ab);
+    rt.plus_frame = uecpRtPlusFrame(rtPlusTags(rt.parts[part], rt.tags), rt.item_toggle, rt.item_running);
     rt.sent_pts = -1;
+}
+
+void TsMuxer::setRadioText(uint16_t sid, const std::string& text) {
+    std::vector<RdsText> parts = rdsRadioTextParts(text);
+    auto& rt = radio_text_[sid];
+    bool same = parts.size() == rt.parts.size() && !rt.frame.empty();
+    for (size_t i = 0; same && i < parts.size(); i++) same = parts[i].text == rt.parts[i].text;
+    std::vector<uint8_t> label = uecpLabelFrame(text);
+    if (same) {
+        if (label != rt.label_frame) {   // (the same in the RDS character set, not as it is)
+            rt.label_frame = std::move(label);
+            rt.sent_pts = -1;
+        }
+        return;
+    }
+    rt.parts = std::move(parts);
+    rt.label_frame = std::move(label);
+    rt.tags.clear();  // the tags were about the old text
+    rt.part_pts = -1;
+    if (rt.parts.empty()) {
+        // no text: an empty RadioText
+        rt.part = 0;
+        rt.text.clear();
+        rt.ab = !rt.ab;
+        rt.frame = uecpRadioTextFrame(rt.text, rt.ab);
+        rt.plus_frame.clear();
+        rt.sent_pts = -1;
+        return;
+    }
+    showRadioTextPart(rt, 0);
 }
 
 void TsMuxer::setRadioTextPlus(uint16_t sid, const std::string& text, const std::vector<std::array<uint8_t, 3>>& tags,
@@ -116,9 +145,14 @@ void TsMuxer::setRadioTextPlus(uint16_t sid, const std::string& text, const std:
     auto it = radio_text_.find(sid);
     if (it == radio_text_.end()) return;
     RadioText& rt = it->second;
-    RdsText mapped = rdsRadioTextMapped(text);
-    if (mapped.text != rt.text) return;  // not the text that is on
-    std::vector<uint8_t> frame = uecpRtPlusFrame(rtPlusTags(mapped, tags), item_toggle, item_running);
+    std::vector<RdsText> parts = rdsRadioTextParts(text);
+    bool same = parts.size() == rt.parts.size() && !parts.empty();
+    for (size_t i = 0; same && i < parts.size(); i++) same = parts[i].text == rt.parts[i].text;
+    if (!same) return;  // not the text that is on
+    rt.tags = tags;
+    rt.item_toggle = item_toggle;
+    rt.item_running = item_running;
+    std::vector<uint8_t> frame = uecpRtPlusFrame(rtPlusTags(rt.parts[rt.part], tags), item_toggle, item_running);
     if (frame == rt.plus_frame) return;
     rt.plus_frame = std::move(frame);
     rt.sent_pts = -1;
@@ -130,14 +164,21 @@ void TsMuxer::setNowPlaying(uint16_t sid, const std::string& title, const std::s
 
 void TsMuxer::outputRadioTexts(int64_t pts) {
     for (auto& [sid, rt] : radio_text_) {
+        // a long label: its next part when this one was on long enough
+        if (rt.parts.size() > 1 && rt.part_pts >= 0 && pts - rt.part_pts >= RADIO_TEXT_PART_PTS) {
+            showRadioTextPart(rt, (rt.part + 1) % rt.parts.size());
+            rt.part_pts = -1;
+        }
         if (rt.sent_pts >= 0 && pts - rt.sent_pts < RADIO_TEXT_REPEAT_PTS) continue;
         auto it = sid_to_index_.find(sid);
         if (it == sid_to_index_.end() || !services_[it->second].rds_pid) continue;
+        if (rt.part_pts < 0) rt.part_pts = pts;
         // stamped with the time of its own audio (the services of an ensemble
         // need not be on one time line); when to send goes by the tick
         auto own = last_audio_pts_.find(sid);
         std::vector<uint8_t> frames = rt.frame;
         frames.insert(frames.end(), rt.plus_frame.begin(), rt.plus_frame.end());
+        frames.insert(frames.end(), rt.label_frame.begin(), rt.label_frame.end());
         outputPes(services_[it->second].rds_pid, frames.data(), frames.size(),
                   own != last_audio_pts_.end() ? own->second : pts, false, 0, 0xBD);
         rt.sent_pts = pts;

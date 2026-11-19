@@ -25,6 +25,7 @@
 #include <functional>
 #include <ctime>
 #include "ts_tables.hpp"
+#include "rds_uecp.hpp"
 
 namespace dvbdab {
 
@@ -267,14 +268,23 @@ private:
 
     // RadioText per service: the UECP frame of its text, when it went out last
     struct RadioText {
-        std::string text;            // in the RDS character set
+        std::vector<RdsText> parts;  // the label as RadioTexts: one, or several for a long one
+        size_t part{0};              // the one that is on
+        int64_t part_pts{-1};        // since when (-1: not sent yet)
+        std::string text;            // the part that is on, in the RDS character set
         bool ab{false};              // A/B flag, changes with the text
         std::vector<uint8_t> frame;
         std::vector<uint8_t> plus_frame;  // its RT+ tags, when it has some
+        std::vector<uint8_t> label_frame; // the whole label, for receivers that know that
+        // the DL Plus tags of the label ({content type, start, length - 1} in its characters)
+        std::vector<std::array<uint8_t, 3>> tags;
+        bool item_toggle{false}, item_running{false};
         int64_t sent_pts{-1};        // -1 = due
     };
     std::map<uint16_t, RadioText> radio_text_;
     static constexpr int64_t RADIO_TEXT_REPEAT_PTS = 3 * 90000;  // again after 3 s
+    static constexpr int64_t RADIO_TEXT_PART_PTS = 6 * 90000;    // a part of a long label is on for 6 s
+    void showRadioTextPart(RadioText& rt, size_t part);
 
     // PCR tracking - use global timeline for multi-program sync
 

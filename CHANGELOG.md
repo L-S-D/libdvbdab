@@ -3,6 +3,15 @@
 What each version changed for a user of the library. The versions are the
 tags of the repository.
 
+## Not yet released
+
+TS output
+- A dynamic label of more than 64 characters is no longer cut: it goes out
+  whole, in RadioTexts of up to 64 characters that take turns every 6 s,
+  each with the RT+ tags that are in it.
+- The whole label (UTF-8) follows the RadioText in a UECP frame of its own,
+  a manufacturer's specific command (MEC 0x2D, designation `dl`).
+
 ## 2.6.0
 
 C API
